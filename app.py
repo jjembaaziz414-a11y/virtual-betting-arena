@@ -1024,4 +1024,34 @@ body{font-family:Arial;background:#121212;color:#fff;padding:15px}.wrap{max-widt
 .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.stat{background:#252525;padding:12px;text-align:center;border-radius:6px}.v{font-size:1.15rem;font-weight:bold;color:#28a745;margin-top:5px}
 input,select{width:100%;box-sizing:border-box;padding:10px;background:#2c2c2c;color:#fff;border:1px solid #444;border-radius:5px;margin:5px 0 12px}
 button{padding:11px;border:0;border-radius:5px;font-weight:bold;cursor:pointer}.add{background:#28a745}.remove{background:#dc3545;color:#fff}.row{background:#252525;padding:10px;border-radius:5px;margin:7px 0}
-.ok{color:#28a745}.warn{color:#ffc107}.err{
+.ok{color:#28a745}.warn{color:#ffc107}.err{color:#dc3545}
+.audit-box{background:#0d1117;border:1px solid #238636;border-radius:6px;padding:12px;margin-top:10px}
+</style></head><body><div class="wrap"><a href="/" style="color:#28a745">← Back to Arena</a>
+<div class="card"><h2>⚙️ Central Arena Control</h2><div class="grid">
+<div class="stat">Game Profit<div class="v">UGX {{ "%.2f"|format(displayed_profit) }}</div></div>
+<div class="stat">House Vault<div class="v">UGX {{ "%.2f"|format(vault_balance) }}</div></div>
+<div class="stat">Return Pool<div class="v">UGX {{ "%.2f"|format(cycle_return_pool) }}</div></div>
+</div>
+<div class="audit-box">
+  <h4 style="margin:0 0 8px;color:#28a745">🔍 System Liquidity Auditor</h4>
+  <div>Players Combined: <b>UGX {{ "%.2f"|format(total_players) }}</b></div>
+  <div>Total System Liquidity: <b>UGX {{ "%.2f"|format(grand_total) }}</b></div>
+</div>
+</div>
+<div class="card"><h3>👤 Player Cashier / Deposit</h3>{% if error %}<p class="err">{{error}}</p>{% endif %}
+<form method="POST" action="/admin/manage"><select name="device_id">{% for d in device_order %}{% set x=devices[d] %}<option value="{{d}}">Device {{x.number}} | Balance: UGX {{'%.2f'|format(x.balance)}}</option>{% endfor %}</select>
+<input name="amount" type="number" min="1" step="any" placeholder="Amount UGX"><button name="action" value="add" class="add">➕ DEPOSIT / ADD</button> <button name="action" value="remove" class="remove">➖ WITHDRAW / REMOVE</button></form></div>
+<div class="card"><h3>🏦 House Funds</h3><form method="POST" action="/admin/house"><input name="amount" type="number" min="1" step="any" placeholder="Amount UGX"><button name="action" value="add" class="add">ADD</button> <button name="action" value="remove" class="remove">REMOVE</button></form></div>
+<div class="card"><h3>📱 Connected Devices ({{device_order|length}})</h3>{% for d in device_order %}{% set x=devices[d] %}<div class="row">Device {{x.number}} — UGX {{'%.2f'|format(x.balance)}} <small>{{d[:12]}}...</small></div>{% endfor %}</div>
+<div class="card"><h3>🏆 Last Winning Bets</h3>
+{% if recent_wins %}
+{% for w in recent_wins %}
+<div class="row">Round {{w.round_idx}} — Side: <b>{{w.selection_type}}</b> — Payout: <b class="ok">UGX {{ "%.2f"|format(w.payout) }}</b></div>
+{% endfor %}
+{% else %}<p>No winning results recorded yet.</p>{% endif %}
+</div></div></body></html>
+"""
+
+if __name__ == '__main__':
+    init_db()
+    app.run(host='0.0.0.0', port=5960, debug=False)
