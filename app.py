@@ -1,116 +1,111 @@
 import uuid
-from flask import Flask, jsonify, render_template_string, request
+import requests
+from flask import Flask, jsonify, render_template, request
 
 app = Flask(__name__)
 
-# Simple in-memory user and house ledger
-users_db = {}  # device_id -> {"balance": 0.0, "phone": ""}
-house_profit = 0.0
+# MTN Sandbox Configuration (Replace with your actual keys once generated)
+MTN_SUBSCRIPTION_KEY = "YOUR_SUBSCRIPTION_KEY"
+MTN_API_USER = "YOUR_API_USER_UUID"
+MTN_API_KEY = "YOUR_API_KEY"
+MTN_TARGET_ENV = "sandbox"  # Change to "production" when live
 
-MAIN_TEMPLATE = """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Virtual Betting Arena</title>
-    <style>
-        body { background: #0d1117; color: #c9d1d9; font-family: Arial, sans-serif; text-align: center; margin: 0; padding: 20px; }
-        .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; max-width: 400px; margin: 20px auto; padding: 20px; }
-        .input { width: 90%; padding: 10px; margin: 8px 0; background: #0d1117; border: 1px solid #30363d; color: #fff; border-radius: 4px; }
-        .btn { background: #238636; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-weight: bold; width: 100%; margin-top: 10px; }
-        .btn:hover { background: #2ea043; }
-    </style>
-</head>
-<body>
-    <h1>Virtual Betting Arena</h1>
-    
-    <div class="card">
-        <h3>Account Balance</h3>
-        <p id="balance" style="font-size: 24px; color: #58a6ff;">UGX 0.00</p>
-    </div>
 
-    <div class="card">
-        <h3>Instant Mobile Money Deposit</h3>
-        <input id="phone" class="input" type="text" placeholder="Phone (e.g. 256771234567)">
-        <select id="network" class="input">
-            <option value="mtn">MTN MoMo</option>
-            <option value="airtel">Airtel Money</option>
-        </select>
-        <input id="amount" class="input" type="number" placeholder="Amount (Min 500)">
-        <button class="btn" onclick="requestDeposit()">Deposit via USSD Push</button>
-    </div>
-
-    <script>
-        const deviceId = 'DEV-' + Math.random().toString(36).substring(2, 9);
-        
-        async function requestDeposit() {
-            const phone = document.getElementById('phone').value;
-            const network = document.getElementById('network').value;
-            const amount = parseFloat(document.getElementById('amount').value);
-
-            if (!phone || !amount || amount < 500) {
-                alert('Please enter a valid phone number and amount.');
-                return;
-            }
-
-            const response = await fetch('/api/deposit', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({device_id: deviceId, phone: phone, network: network, amount: amount})
-            });
-            const data = await response.json();
-            alert(data.message);
-        }
-    </script>
-</body>
-</html>
-"""
+def get_mtn_token():
+  """Generates an OAuth token from MTN MoMo API"""
+  token_url = (
+      "https://sandbox.momodeveloper.mtn.com/collection/token/v1_0/token"
+  )
+  headers = {
+      "Ocp-Apim-Subscription-Key": MTN_SUBSCRIPTION_KEY,
+  }
+  # MTN requires HTTP Basic Auth using apiUser as username and apiKey as password
+  response = requests.post(
+      token_url, headers=headers, auth=(MTN_API_USER, MTN_API_KEY)
+  )
+  if response.status_code == 200:
+    return response.json().get("access_token")
+  return None
 
 
 @app.route("/")
 def index():
-  return render_template_string(MAIN_TEMPLATE)
+  return render_template("index.html")
 
 
 @app.route("/api/deposit", methods=["POST"])
 def api_deposit():
-  data = request.json or {}
-  device_id = data.get("device_id")
+  data = request.get_json()
   phone = data.get("phone")
-  amount = float(data.get("amount", 0))
+  amount = data.get("amount")
+  network = data.get("network")
 
-  if not device_id or amount < 500:
-    return jsonify(
-        {"success": False, "message": "Invalid deposit parameters."}
+  if not phone or not amount:
+    return jsonify({"success": False, "error": "Phone and amount are required"}), 400
+
+  if network == "MTN":
+    token = get_mtn_token()
+    if not token:
+      return (
+          jsonify({
+              "success": False,
+              "error": "Failed to authenticate with MTN MoMo",
+          }),
+          500,
+      )
+
+    reference_id = str(uuid.uuid4())
+    deposit_url = (
+        "https://sandbox.momodeveloper.mtn.com/collection/v1_0/requesttopay"
     )
 
-  if device_id not in users_db:
-    users_db[device_id] = {"balance": 0.0, "phone": phone}
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "X-Reference-Id": reference_id,
+        "X-Target-Environment": MTN_TARGET_ENV,
+        "Ocp-Apim-Subscription-Key": MTN_SUBSCRIPTION_KEY,
+        "Content-Type": "application/json",
+    }
 
-  external_ref = f"DEP-{uuid.uuid4().hex[:8].upper()}"
+    payload = {
+        "amount": str(amount),
+        "currency": "UGX",
+        "externalId": str(uuid.uuid4()),
+        "payer": {"partyIdType": "MSISDN", "partyId": phone},
+        "payerMessage": "JJ Virtual Betting Deposit",
+        "payeeNote": "Account Deposit",
+    }
 
-  return jsonify({
-      "success": True,
-      "message": (
-          f"USSD Push sent to {phone} for UGX {amount:,.0f}. Reference:"
-          f" {external_ref}"
-      ),
-      "ref": external_ref,
-  })
+    res = requests.post(deposit_url, headers=headers, json=payload)
+    if res.status_code in [200, 202]:
+      return jsonify({
+          "success": True,
+          "message": f"USSD push sent successfully to {phone}!",
+          "reference": reference_id,
+      })
+    else:
+      return (
+          jsonify({
+              "success": False,
+              "error": f"MTN Error: {res.text}",
+          }),
+          400,
+      )
 
+  elif network == "Airtel":
+    # Placeholder for Airtel logic once your app status is approved
+    return (
+        jsonify({
+            "success": False,
+            "error": (
+                "Airtel integration is pending developer portal approval."
+            ),
+        }),
+        400,
+    )
 
-@app.route("/api/webhook/mtn", methods=["POST"])
-def mtn_webhook():
-  data = request.json or {}
-  # Handle verified MTN deposit confirmations here
-  return jsonify({"status": "received"}), 200
-
-
-@app.route("/api/webhook/airtel", methods=["POST"])
-def airtel_webhook():
-  data = request.json or {}
-  # Handle verified Airtel deposit confirmations here
-  return jsonify({"status": "received"}), 200
+  return jsonify({"success": False, "error": "Invalid network selected"}), 400
 
 
 if __name__ == "__main__":
-  app.run(host="0.0.0.0", port=5000, debug=True)
+  app.run(debug=True, port=5000)
