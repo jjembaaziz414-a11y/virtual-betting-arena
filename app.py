@@ -752,7 +752,7 @@ def place_bet():
 def admin():
     dev_id = session.get('device_id')
     if not session.get('is_admin') or dev_id != master_admin_device_id: return redirect(url_for('portal'))
-    pending = [v for v in pending_payouts.values() if v.get("status") == "pending"]
+    pending = [v for v in pending_payouts.values() if v.get("status"] == "pending"]
     total_players = sum(d["balance"] for d in connected_devices.values())
     pending_sum = sum(p["amount"] for p in pending if not p.get("local_credited", False))
     grand_total = round(total_players + game_profit + cycle_return_pool + pending_sum, 2)
