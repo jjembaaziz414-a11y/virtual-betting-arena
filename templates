@@ -1,6 +1,0 @@
-virtual-betting-arena/
-├── app.py
-├── game_state.db
-├── requirements.txt
-└── templates/
-    └── index.html
