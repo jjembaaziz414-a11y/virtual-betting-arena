@@ -15,7 +15,7 @@ except Exception:
 app = Flask(__name__)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # Render's persistent disk is mounted at /var/data. Keep SQLite and the Flask
-# signing key there so deploys/restarts do not create a new season or lose sessions.[cite: 1]
+# signing key there so deploys/restarts do not create a new season or lose sessions.[cite: 1, 2]
 DATA_DIR = os.environ.get("DATA_DIR") or (
     "/var/data" if os.path.isdir("/var/data") and os.access("/var/data", os.W_OK) else BASE_DIR
 )
@@ -479,11 +479,17 @@ def ensure_device(dev_id=None):
             sync_device_to_db(dev_id)
     return dev_id
 
+@app.route('/')
+def index():
+    if session.get('account_id'):
+        return redirect(url_for('arena_page'))
+    return redirect(url_for('login_page'))
+
 @app.before_request
 def track_device():
     session.permanent = True
     path = request.path
-    if path in ('/login', '/register', '/logout', '/health', '/debug/users'):
+    if path in ('/', '/login', '/register', '/logout', '/health', '/debug/users'):
         return None
     account_id = session.get('account_id')
     if account_id:
