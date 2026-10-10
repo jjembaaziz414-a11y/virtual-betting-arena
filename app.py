@@ -15,7 +15,7 @@ except Exception:
 app = Flask(__name__)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # Render's persistent disk is mounted at /var/data. Keep SQLite and the Flask
-# signing key there so deploys/restarts do not create a new season or lose sessions.[cite: 18]
+# signing key there so deploys/restarts do not create a new season or lose sessions.
 DATA_DIR = os.environ.get("DATA_DIR") or (
     "/var/data" if os.path.isdir("/var/data") and os.access("/var/data", os.W_OK) else BASE_DIR
 )
@@ -23,7 +23,7 @@ os.makedirs(DATA_DIR, exist_ok=True)
 SECRET_KEY_FILE = os.path.join(DATA_DIR, "session_secret.key")
 
 def load_or_create_secret_key():
-    """Keep Flask session signatures stable across normal server restarts."""[cite: 18]
+    """Keep Flask session signatures stable across normal server restarts."""
     env_key = os.environ.get("SECRET_KEY")
     if env_key:
         return env_key
@@ -50,21 +50,21 @@ app.config.update(
     SESSION_COOKIE_SAMESITE='Lax',
     SESSION_COOKIE_SECURE=os.environ.get('HTTPS_ENABLED', '0') == '1',
     SESSION_PERMANENT=True,
-    PERMANENT_SESSION_LIFETIME=31536000  # keep device identity for one year[cite: 18]
+    PERMANENT_SESSION_LIFETIME=31536000  # keep device identity for one year
 )
 
 lock = threading.Lock()
 DB_FILE = os.path.join(DATA_DIR, "game_state.db")
 
 # Master PIN
-ADMIN_PIN = "4422"[cite: 18]
+ADMIN_PIN = "4422"
 
 PROTECTED_RESERVE = 30000.00
-HOUSE_VAULT_INITIAL = 50000.00[cite: 18]
+HOUSE_VAULT_INITIAL = 50000.00
 BOOKMAKER_OVERROUND = 1.20
 HOUSE_COMMISSION_RATE = 0.20
 
-# Memory runtime state (Loaded from DB on start)[cite: 18]
+# Memory runtime state (Loaded from DB on start)
 connected_devices = {}
 device_order = []
 master_admin_device_id = None
@@ -87,7 +87,7 @@ DEVICE_COLORS = [
 ]
 
 BETTING_DURATION = 50.0
-MATCH_DURATION = 93.0  # 45 sec first half + 3 sec break + 45 sec second half[cite: 18]
+MATCH_DURATION = 93.0  # 45 sec first half + 3 sec break + 45 sec second half
 HALF_TIME_BREAK_DURATION = 3.0
 CYCLE_DURATION = BETTING_DURATION + MATCH_DURATION
 GLOBAL_START_TIME = time.time()
@@ -100,7 +100,7 @@ TEAMS_POOL = [
 ]
 
 # ----------------------------------------------------
-# DATABASE RECOVERY ENGINE[cite: 18]
+# DATABASE RECOVERY ENGINE
 # ----------------------------------------------------
 def get_db():
     conn = sqlite3.connect(DB_FILE)
@@ -108,7 +108,7 @@ def get_db():
     return conn
 
 def init_db():
-    """Initializes persistent tables and restores memory state on server boot."""[cite: 18]
+    """Initializes persistent tables and restores memory state on server boot."""
     global house_vault, game_profit, cycle_return_pool, total_player_deposits, GLOBAL_START_TIME
     global master_admin_device_id
 
@@ -174,7 +174,7 @@ def init_db():
             )
         ''')
 
-        # Persist locked match outcomes so a server restart cannot reroll a live match.[cite: 18]
+        # Persist locked match outcomes so a server restart cannot reroll a live match.
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS match_results (
                 round_idx INTEGER PRIMARY KEY,
@@ -188,7 +188,7 @@ def init_db():
             )
         ''')
 
-        # Persistent history of winning bets for the admin's recent-results panel[cite: 18]
+        # Persistent history of winning bets for the admin's recent-results panel
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS winning_history (
                 bet_id TEXT PRIMARY KEY,
@@ -204,7 +204,7 @@ def init_db():
         
         conn.commit()
 
-    # Keep the match-cycle timeline stable through a normal process restart.[cite: 18]
+    # Keep the match-cycle timeline stable through a normal process restart.
     with get_db() as conn:
         row = conn.execute("SELECT val_num FROM system_state WHERE key='global_start_time'").fetchone()
         if row and row[0] is not None:
@@ -217,7 +217,7 @@ def init_db():
             )
             conn.commit()
 
-    # RESTORE STATE FROM DB[cite: 18]
+    # RESTORE STATE FROM DB
     restore_system_state()
 
 def save_system_metric(key, val_num, val_str=None):
@@ -289,7 +289,7 @@ def restore_system_state():
         for row in cursor.execute("SELECT round_idx FROM settled_rounds"):
             settled_rounds.add(row['round_idx'])
 
-        # Restore locked scores/outcomes, preventing a restart from changing a match.[cite: 18]
+        # Restore locked scores/outcomes, preventing a restart from changing a match.
         for row in cursor.execute("SELECT * FROM match_results"):
             round_result_cache[int(row['round_idx'])] = {
                 "ft_outcome": row['ft_outcome'],
@@ -449,7 +449,7 @@ def ensure_device(dev_id=None):
 
 @app.before_request
 def track_device():
-    # Use a persistent browser cookie so closing/reopening Chrome keeps the same device.[cite: 18]
+    # Use a persistent browser cookie so closing/reopening Chrome keeps the same device.
     session.permanent = True
     dev_id = session.get('device_id')
     if not dev_id:
@@ -564,7 +564,7 @@ def get_current_round_data(auto_settle=True):
     return_pool_selected = False
 
     # Select FT + HT as ONE liability. Both markets can win in the same
-    # match, so the combined payout must fit inside the available pool.[cite: 18]
+    # match, so the combined payout must fit inside the available pool.
     if bets_for_round:
         ft_keys = list(projected_payouts.keys())
         ht_keys = list(ht_projected_payouts.keys())
@@ -756,7 +756,7 @@ def settle_round_if_needed(round_data):
                 winning_bets.append((bet, payout))
                 total_winning_payout = round(total_winning_payout + payout, 2)
 
-        # Record winning selections once, including wins queued for later payment.[cite: 18]
+        # Record winning selections once, including wins queued for later payment.
         with get_db() as conn:
             for bet, payout in winning_bets:
                 bet_id = str(bet.get("id") or f"{round_idx}:{bet['dev_id']}:{bet.get('market')}:{bet.get('selection_type')}")
@@ -806,7 +806,7 @@ def settle_round_if_needed(round_data):
             conn.commit()
         log_system_audit(f"ROUND {round_idx} SETTLED")
 
-# Initialize persistent state when imported by Gunicorn/Render.[cite: 18]
+# Initialize persistent state when imported by Gunicorn/Render.
 init_db()
 
 @app.route('/')
@@ -855,7 +855,7 @@ def get_state():
             })
 
     # The previous round is globally locked and therefore identical for every
-    # connected browser. Show this player's exact win/loss outcome for it.[cite: 18]
+    # connected browser. Show this player's exact win/loss outcome for it.
     last_round = data["round_idx"] - 1
     last_result = round_result_cache.get(last_round)
     last_player_bets = [
@@ -925,7 +925,7 @@ def get_state():
         "bookmaker_overround": BOOKMAKER_OVERROUND,
         "house_commission_rate": HOUSE_COMMISSION_RATE,
         "demo_cycle_return_pool": cycle_return_pool,
-        "risk_model_note": "Shared server state: all connected browsers receive the same match, odds, locked result and score.",[cite: 18]
+        "risk_model_note": "Shared server state: all connected browsers receive the same match, odds, locked result and score.",
         "accounting_note": "Game profit cannot be negative."
     })
 
@@ -954,7 +954,7 @@ def place_bet():
 
         round_idx = round_data['round_idx']
         # Multiple bets per connected device are allowed during the betting window.
-        # Each submission is recorded as its own bet with its own stake/selection.[cite: 18]
+        # Each submission is recorded as its own bet with its own stake/selection.
 
         odds_source = round_data["ht_odds"] if market == "ht_result" else round_data["odds"]
         true_odds = round(float(odds_source.get(sel_type, 0)), 2)
@@ -962,12 +962,12 @@ def place_bet():
 
         effective_stake = round(stake, 2)
 
-        # Split 20% Commission / 80% Return Pool[cite: 18]
+        # Split 20% Commission / 80% Return Pool
         commission = round(effective_stake * HOUSE_COMMISSION_RATE, 2)
         pool_portion = round(effective_stake - commission, 2)
 
         # Safety gate: reserve existing pending liabilities and require at
-        # least one complete FT+HT result to be coverable after this bet.[cite: 18]
+        # least one complete FT+HT result to be coverable after this bet.
         projected_pool_after_bet = round(cycle_return_pool + pool_portion, 2)
         reserved_pending = round(sum(
             float(p.get("amount", 0))
@@ -1054,7 +1054,7 @@ def place_bet():
 def admin():
     dev_id = session.get('device_id')
     if not session.get('is_admin') or dev_id != master_admin_device_id: return redirect(url_for('portal'))
-    pending = [v for v in pending_payouts.values() if v.get("status"] == "pending"]
+    pending = [v for v in pending_payouts.values() if v.get("status") == "pending"]
     total_players = sum(d["balance"] for d in connected_devices.values())
     pending_sum = sum(p["amount"] for p in pending if not p.get("local_credited", False))
     grand_total = round(total_players + game_profit + cycle_return_pool + pending_sum, 2)
@@ -1125,7 +1125,7 @@ def admin_house():
 
 # ----------------------------------------------------
 # AVIATOR GAME (integrated into the website; shares the same device balances)
-# Admin access is inherited from the football admin PIN and one-device lock.[cite: 18]
+# Admin access is inherited from the football admin PIN and one-device lock.
 # ----------------------------------------------------
 AVIATOR_HOUSE_START = 50000.0
 aviator_lock = threading.RLock()
@@ -1136,7 +1136,7 @@ aviator_players = {}
 aviator_house_balance = AVIATOR_HOUSE_START
 aviator_net_profit = 0.0
 def save_aviator_state():
-    """Persist Aviator history/player bet state using the same persistent SQLite DB."""[cite: 18]
+    """Persist Aviator history/player bet state using the same persistent SQLite DB."""
     try:
         with get_db() as conn:
             payload = {"history": aviator_game.get("history", []), "players": aviator_players}
@@ -1157,7 +1157,7 @@ try:
             _saved = json.loads(_state_row[0])
             if isinstance(_saved.get("history"), list): aviator_game["history"] = _saved["history"][:10]
             if isinstance(_saved.get("players"), dict): aviator_players.update(_saved["players"])
-            # If a deployment interrupted a live bet, treat charged, uncollected stakes as losses.[cite: 18]
+            # If a deployment interrupted a live bet, treat charged, uncollected stakes as losses.
             for _ap in aviator_players.values():
                 if _ap.get("charged_1") and _ap.get("bet_active_1") and not _ap.get("cashed_out_1"):
                     _ap["last_result"] = "Round interrupted by server restart; stake was lost."
@@ -1177,7 +1177,7 @@ def aviator_player(dev_id):
     return aviator_players[dev_id]
 
 def aviator_loop():
-    """Resilient shared Aviator round loop; recover from malformed saved player state."""[cite: 18]
+    """Resilient shared Aviator round loop; recover from malformed saved player state."""
     global aviator_house_balance, aviator_net_profit
     while True:
         try:
@@ -1243,7 +1243,7 @@ def aviator_loop():
                 save_aviator_state()
             time.sleep(3)
         except Exception as exc:
-            # A malformed state or transient DB issue must not permanently kill the game thread.[cite: 18]
+            # A malformed state or transient DB issue must not permanently kill the game thread.
             try:
                 with aviator_lock:
                     aviator_game.update(status="WAITING", multiplier=1.0,
@@ -1253,7 +1253,7 @@ def aviator_loop():
                 pass
             time.sleep(2)
 
-# Start only one game loop in the single-worker Render deployment.[cite: 18, 20]
+# Start only one game loop in the single-worker Render deployment.
 if not app.config.get("AVIATOR_LOOP_STARTED"):
     app.config["AVIATOR_LOOP_STARTED"] = True
     threading.Thread(target=aviator_loop, daemon=True, name="aviator-loop").start()
@@ -1350,7 +1350,7 @@ def aviator_admin():
 
 
 # ----------------------------------------------------
-# RUGBY DEMO GAME — separate selection, shared player balance[cite: 18]
+# RUGBY DEMO GAME — separate selection, shared player balance
 # ----------------------------------------------------
 RUGBY_CYCLE_SECONDS = 45
 RUGBY_BETTING_SECONDS = 15
@@ -1366,14 +1366,14 @@ def rugby_round_data():
     elapsed = now % RUGBY_CYCLE_SECONDS
     rng = random.Random(87000 + idx)
     home, away = RUGBY_TEAMS[rng.randrange(len(RUGBY_TEAMS))]
-    # Fixed result per round, shared by all players.[cite: 18]
+    # Fixed result per round, shared by all players.
     home_score = rng.choice([7, 12, 14, 17, 19, 21, 24, 28, 31, 35])
     away_score = rng.choice([0, 5, 7, 10, 14, 17, 21, 24, 28, 33])
     if home_score > away_score: result = "1"
     elif home_score < away_score: result = "2"
     else: result = "X"
     phase = "BETTING" if elapsed < RUGBY_BETTING_SECONDS else "LIVE"
-    # Settle the previous round once everyone has moved into the next round.[cite: 18]
+    # Settle the previous round once everyone has moved into the next round.
     previous = idx - 1
     if previous >= 0 and previous not in rugby_settled:
         with rugby_lock:
@@ -1830,4 +1830,4 @@ def extra_games_play():
 
 if __name__ == '__main__':
     init_db()
-    app.run(host='0.0.0.0', port=5961, debug=False)
+    app.run(host='0.0.0.0', port=5961, debug=False)w
