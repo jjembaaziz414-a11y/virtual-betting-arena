@@ -484,7 +484,7 @@ def track_device():
     # A logged-in player maps every browser/session to the same stable wallet ID.
     session.permanent = True
     path = request.path
-    if path in ('/login', '/register', '/logout', '/health'):
+    if path in ('/login', '/register', '/logout', '/health', '/debug/users'):
         return None
     account_id = session.get('account_id')
     if account_id:
@@ -617,8 +617,6 @@ def get_current_round_data(auto_settle=True):
 
     return_pool_selected = False
 
-    # Select FT + HT as ONE liability. Both markets can win in the same
-    # match, so the combined payout must fit inside the available pool.
     if bets_for_round:
         ft_keys = list(projected_payouts.keys())
         ht_keys = list(ht_projected_payouts.keys())
@@ -810,7 +808,6 @@ def settle_round_if_needed(round_data):
                 winning_bets.append((bet, payout))
                 total_winning_payout = round(total_winning_payout + payout, 2)
 
-        # Record winning selections once, including wins queued for later payment.
         with get_db() as conn:
             for bet, payout in winning_bets:
                 bet_id = str(bet.get("id") or f"{round_idx}:{bet['dev_id']}:{bet.get('market')}:{bet.get('selection_type')}")
@@ -875,7 +872,7 @@ def portal():
                                   account_name=session.get('username','Player'), balance=info.get('balance',0), deposit_requests=deposits)
 
 AUTH_TEMPLATE = r'''<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{title}} | Virtual Betting Arena</title><style>
-*{box-sizing:border-box}body{margin:0;background:#07152b;color:#f8fafc;font-family:Arial,sans-serif;min-height:100vh;display:grid;place-items:center;padding:18px}.auth{width:100%;max-width:430px;background:#102443;border:1px solid #25476f;border-radius:18px;padding:24px;box-shadow:0 20px 60px #0007}.brand{font-weight:900;color:#29d17d;letter-spacing:.5px;font-size:23px}.sub{color:#b7c7dc;font-size:13px;line-height:1.5}.field{width:100%;padding:13px;border-radius:9px;border:1px solid #345579;background:#08172d;color:#fff;margin:7px 0 13px;font-size:16px}.submit{width:100%;border:0;background:#25c76f;color:#062014;font-weight:900;padding:14px;border-radius:9px;cursor:pointer;font-size:16px}.link{color:#7de8ae}.error{background:#4b1d2b;color:#ffc4cf;padding:10px;border-radius:8px;margin:12px 0}.note{font-size:12px;color:#9eb1ca;margin-top:15px}</style></head><body><main class="auth"><div class="brand">⚡ VIRTUAL BETTING ARENA</div><h2>{{title}}</h2><p class="sub">One player account and one shared wallet for Football, Aviator, Rugby, Car Racing, Dog Racing, Chicken Clash, Hot 7 Fruit and Fortune Slots.</p>{% if error %}<div class="error">{{error}}</div>{% endif %}<form method="post"><label>Username</label><input class="field" name="username" required minlength="3" maxlength="30" autocomplete="username" placeholder="Choose a username"><label>Password</label><input class="field" name="password" type="password" required minlength="6" autocomplete="{{'new-password' if mode=='register' else 'current-password'}}" placeholder="At least 6 characters">{% if mode=='register' %}<label>Confirm password</label><input class="field" name="confirm" type="password" required minlength="6" autocomplete="new-password" placeholder="Repeat password">{% endif %}<button class="submit" type="submit">{{'CREATE ACCOUNT' if mode=='register' else 'LOG IN'}}</button></form><p>{% if mode=='register' %}Already registered? <a class="link" href="/login">Log in</a>{% else %}New player? <a class="link" href="/register">Create account</a>{% endif %}</p><div class="note">Demo wallet starting credit is UGX 10,000. Deposit requests are credited only after an admin verifies the payment reference. No payment provider is connected yet.</div></main></body></html>'''
+*{box-sizing:border-box}body{margin:0;background:#07152b;color:#f8fafc;font-family:Arial,sans-serif;min-height:100vh;display:grid;place-items:center;padding:18px}.auth{width:100%;max-width:430px;background:#102443;border:1px solid #25476f;border-radius:18px;padding:24px;box-shadow:0 20px 60px #0007}.brand{font-weight:900;color:#29d17d;letter-spacing:.5px;font-size:23px}.sub{color:#b7c7dc;font-size:13px;line-height:1.5}.field{width:100%;padding:13px;border-radius:9px;border:1px solid #345579;background:#08172d;color:#fff;margin:7px 0 13px;font-size:16px}.submit{width:100%;border:0;background:#25c76f;color:#062014;font-weight:900;padding:14px;border-radius:9px;cursor:pointer;font-size:16px}.link{color:#7de8ae}.error{background:#4b1d2b;color:#ffc4cf;padding:10px;border-radius:8px;margin:12px 0}.note{font-size:12px;color:#9eb1ca;margin-top:15px}</style></head><body><main class="auth"><div class="brand">⚡ VIRTUAL BETTING ARENA</div><h2>{{title}}</h2><p class="sub">One player account and one shared wallet for Football, Aviator, Rugby, Racing, Chicken Clash, Hot 7 Fruit and Fortune Slots.</p>{% if error %}<div class="error">{{error}}</div>{% endif %}<form method="post"><label>Username</label><input class="field" name="username" required minlength="3" maxlength="30" autocomplete="username" placeholder="Choose a username"><label>Password</label><input class="field" name="password" type="password" required minlength="6" autocomplete="{{'new-password' if mode=='register' else 'current-password'}}" placeholder="At least 6 characters">{% if mode=='register' %}<label>Confirm password</label><input class="field" name="confirm" type="password" required minlength="6" autocomplete="new-password" placeholder="Repeat password">{% endif %}<button class="submit" type="submit">{{'CREATE ACCOUNT' if mode=='register' else 'LOG IN'}}</button></form><p>{% if mode=='register' %}Already registered? <a class="link" href="/login">Log in</a>{% else %}New player? <a class="link" href="/register">Create account</a>{% endif %}</p><div class="note">Demo wallet starting credit is UGX 10,000. Deposit requests are credited only after an admin verifies the payment reference. No payment provider is connected yet.</div></main></body></html>'''
 
 @app.route('/register', methods=['GET','POST'])
 def register_page():
@@ -939,6 +936,23 @@ def login_page():
 def logout_page():
     session.clear()
     return redirect(url_for('login_page'))
+
+# Diagnostic route to confirm user persistence
+@app.route('/debug/users')
+def debug_users():
+    """Temporary diagnostic route to check saved user accounts in the database."""
+    try:
+        with get_db() as conn:
+            rows = conn.execute('SELECT id, username, wallet_dev_id, created_at FROM player_accounts').fetchall()
+            users = [dict(row) for row in rows]
+        return jsonify({
+            "success": True,
+            "database_file": DB_FILE,
+            "total_accounts": len(users),
+            "accounts": users
+        })
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 
 @app.route('/deposit/request', methods=['POST'])
 def deposit_request():
@@ -1028,8 +1042,6 @@ def get_state():
                 "odds": round(float(b.get("odds", 0)), 2)
             })
 
-    # The previous round is globally locked and therefore identical for every
-    # connected browser. Show this player's exact win/loss outcome for it.
     last_round = data["round_idx"] - 1
     last_result = round_result_cache.get(last_round)
     last_player_bets = [
@@ -1127,21 +1139,15 @@ def place_bet():
         if round_data['phase'] != 'betting': return jsonify({"success": False, "message": "Betting window is closed for this round!"})
 
         round_idx = round_data['round_idx']
-        # Multiple bets per connected device are allowed during the betting window.
-        # Each submission is recorded as its own bet with its own stake/selection.
-
         odds_source = round_data["ht_odds"] if market == "ht_result" else round_data["odds"]
         true_odds = round(float(odds_source.get(sel_type, 0)), 2)
         if true_odds <= 0: return jsonify({"success": False, "message": "Invalid odds."})
 
         effective_stake = round(stake, 2)
 
-        # Split 20% Commission / 80% Return Pool
         commission = round(effective_stake * HOUSE_COMMISSION_RATE, 2)
         pool_portion = round(effective_stake - commission, 2)
 
-        # Safety gate: reserve existing pending liabilities and require at
-        # least one complete FT+HT result to be coverable after this bet.
         projected_pool_after_bet = round(cycle_return_pool + pool_portion, 2)
         reserved_pending = round(sum(
             float(p.get("amount", 0))
@@ -1296,10 +1302,8 @@ def admin_house():
             central_income(amount, "house-fund-remove")
     return redirect(url_for('admin'))
 
-
 # ----------------------------------------------------
-# AVIATOR GAME (integrated into the website; shares the same device balances)
-# Admin access is inherited from the football admin PIN and one-device lock.
+# AVIATOR GAME
 # ----------------------------------------------------
 AVIATOR_HOUSE_START = 50000.0
 aviator_lock = threading.RLock()
@@ -1310,7 +1314,6 @@ aviator_players = {}
 aviator_house_balance = AVIATOR_HOUSE_START
 aviator_net_profit = 0.0
 def save_aviator_state():
-    """Persist Aviator history/player bet state using the same persistent SQLite DB."""
     try:
         with get_db() as conn:
             payload = {"history": aviator_game.get("history", []), "players": aviator_players}
@@ -1331,7 +1334,6 @@ try:
             _saved = json.loads(_state_row[0])
             if isinstance(_saved.get("history"), list): aviator_game["history"] = _saved["history"][:10]
             if isinstance(_saved.get("players"), dict): aviator_players.update(_saved["players"])
-            # If a deployment interrupted a live bet, treat charged, uncollected stakes as losses.
             for _ap in aviator_players.values():
                 if _ap.get("charged_1") and _ap.get("bet_active_1") and not _ap.get("cashed_out_1"):
                     _ap["last_result"] = "Round interrupted by server restart; stake was lost."
@@ -1351,17 +1353,9 @@ def aviator_player(dev_id):
     return aviator_players[dev_id]
 
 def aviator_loop():
-    """Run Aviator continuously like the original standalone/mobile version.
-
-    Each cycle opens a 3-second betting window, charges queued stakes exactly
-    once at take-off, advances the multiplier, records the crash, and starts
-    the next round. Per-round failures are logged with a traceback so the loop
-    can recover instead of silently appearing stuck on the waiting screen.
-    """
     global aviator_house_balance, aviator_net_profit
     while True:
         try:
-            # BETTING WINDOW: clients can queue bets while status is WAITING.
             with aviator_lock:
                 aviator_game.update(status="WAITING", multiplier=1.0,
                                     message="NEXT ROUND STARTING SOON...")
@@ -1379,7 +1373,6 @@ def aviator_loop():
                         ap["charged_2"] = False
             time.sleep(3.0)
 
-            # Determine this round's crash point and take queued stakes.
             with aviator_lock:
                 r = random.random()
                 if r < .40:
@@ -1421,7 +1414,6 @@ def aviator_loop():
                 save_system_metric('aviator_net_profit', aviator_net_profit)
                 save_aviator_state()
 
-            # FLIGHT: smoothly increase multiplier until it reaches the crash point.
             current_mult = 1.0
             while current_mult < cp:
                 time.sleep(0.08)
@@ -1432,7 +1424,6 @@ def aviator_loop():
                     aviator_game["multiplier"] = current_mult
                     aviator_game["message"] = f"FLYING — {current_mult:.2f}x"
 
-            # CRASH and clear round bets. Cash-outs already collected stay settled.
             with aviator_lock:
                 aviator_game.update(status="CRASHED", multiplier=cp,
                                     message=f"FLEW AWAY @ {cp:.2f}x!")
@@ -1452,7 +1443,6 @@ def aviator_loop():
                 save_aviator_state()
             time.sleep(3.0)
         except Exception as exc:
-            # Keep the shared game alive, but make the actual failure visible in Render logs.
             import traceback
             print(f"[AVIATOR LOOP ERROR] {type(exc).__name__}: {exc}", flush=True)
             traceback.print_exc()
@@ -1464,7 +1454,6 @@ def aviator_loop():
                 pass
             time.sleep(1.0)
 
-# Start only one game loop in the single-worker Render deployment.
 if not app.config.get("AVIATOR_LOOP_STARTED"):
     app.config["AVIATOR_LOOP_STARTED"] = True
     threading.Thread(target=aviator_loop, daemon=True, name="aviator-loop").start()
@@ -1559,9 +1548,8 @@ def aviator_admin():
             rows.append((d.get('number', '?'), d.get('balance', 0), ap.get('last_result', '')))
     return render_template_string('''<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Aviator Admin</title><style>body{background:#101820;color:white;font-family:Arial;padding:20px}.card{max-width:700px;margin:auto;background:#1c2a39;padding:20px;border-radius:12px}a{color:#6ee7b7}td,th{padding:8px;border-bottom:1px solid #405166;text-align:left}</style></head><body><div class="card"><h2>✈ Aviator Admin</h2><p>Access is restricted to the same registered device as Football Admin and requires PIN 4422.</p><p>House balance: <b>UGX {{'%.2f'|format(house)}}</b></p><p>Net house profit/loss: <b>UGX {{'%.2f'|format(profit)}}</b></p><p>Round: <b>{{status}}</b> — {{message}}</p><table><tr><th>Device</th><th>Balance</th><th>Last Aviator result</th></tr>{% for n,b,r in rows %}<tr><td>{{n}}</td><td>UGX {{'%.2f'|format(b)}}</td><td>{{r}}</td></tr>{% endfor %}</table><p><a href="/admin">Football Admin</a> · <a href="/">Lobby</a></p></div></body></html>''', house=aviator_house_balance, profit=aviator_net_profit, status=aviator_game['status'], message=aviator_game['message'], rows=rows)
 
-
 # ----------------------------------------------------
-# RUGBY DEMO GAME — separate selection, shared player balance
+# RUGBY DEMO GAME
 # ----------------------------------------------------
 RUGBY_CYCLE_SECONDS = 45
 RUGBY_BETTING_SECONDS = 15
@@ -1577,14 +1565,12 @@ def rugby_round_data():
     elapsed = now % RUGBY_CYCLE_SECONDS
     rng = random.Random(87000 + idx)
     home, away = RUGBY_TEAMS[rng.randrange(len(RUGBY_TEAMS))]
-    # Fixed result per round, shared by all players.
     home_score = rng.choice([7, 12, 14, 17, 19, 21, 24, 28, 31, 35])
     away_score = rng.choice([0, 5, 7, 10, 14, 17, 21, 24, 28, 33])
     if home_score > away_score: result = "1"
     elif home_score < away_score: result = "2"
     else: result = "X"
     phase = "BETTING" if elapsed < RUGBY_BETTING_SECONDS else "LIVE"
-    # Settle the previous round once everyone has moved into the next round.
     previous = idx - 1
     if previous >= 0 and previous not in rugby_settled:
         with rugby_lock:
@@ -1652,7 +1638,7 @@ def rugby_bet():
 PORTAL_TEMPLATE = r"""
 <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Virtual Betting Arena</title><style>
 *{box-sizing:border-box}body{margin:0;background:#07152b;color:#f7fafc;font-family:Arial,sans-serif}.top{background:#0c203c;border-bottom:2px solid #1b8f59;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;gap:10px;position:sticky;top:0;z-index:5}.logo{font-weight:900;color:#35d780;font-size:20px}.bal{background:#123c31;color:#9fffc5;padding:9px 12px;border-radius:9px;font-weight:900;white-space:nowrap}.wrap{max-width:1000px;margin:auto;padding:14px}.welcome{background:linear-gradient(115deg,#12355b,#10452f);padding:18px;border-radius:14px;border:1px solid #285c68;margin-bottom:14px}.welcome h1{margin:0 0 6px;font-size:22px}.muted{color:#b5c7dc;font-size:13px}.notice{background:#123e2c;color:#a7f3d0;border-radius:8px;padding:10px;margin:8px 0}.err{background:#4b1d2b;color:#ffc4cf;border-radius:8px;padding:10px;margin:8px 0}.section-title{font-size:16px;font-weight:900;margin:20px 0 10px}.games{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.game{display:flex;gap:12px;align-items:center;text-decoration:none;color:#fff;background:#102542;border:1px solid #27486e;border-radius:12px;padding:14px;min-height:100px}.game:hover{border-color:#37d783;transform:translateY(-1px)}.emoji{font-size:32px;width:45px;text-align:center}.game b{display:block;margin-bottom:5px}.tag{display:inline-block;color:#8df0b4;font-size:11px;margin-top:4px}.wallet{background:#102542;border:1px solid #27486e;border-radius:12px;padding:16px;margin-top:14px}.formgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px}.field{width:100%;padding:12px;background:#07172e;color:white;border:1px solid #365779;border-radius:8px;margin-top:5px}.submit{background:#2bd178;color:#062014;font-weight:900;border:0;border-radius:8px;padding:12px;cursor:pointer}.links{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}.links a{color:#a7f3d0}.small{font-size:12px;color:#9fb4ce}@media(max-width:520px){.games{grid-template-columns:1fr}.formgrid{grid-template-columns:1fr}.logo{font-size:16px}.top{padding:10px}}
-</style></head><body><header class="top"><div class="logo">⚡ VIRTUAL BETTING ARENA</div><div class="bal">UGX {{'%.0f'|format(balance)}}</div></header><main class="wrap"><section class="welcome"><h1>Welcome, {{account_name}}</h1><div class="muted">One account · One wallet · Play any game and keep the same balance everywhere.</div></section>{% if request.args.get('error') %}<div class="err">{{request.args.get('error')}}</div>{% endif %}{% if request.args.get('deposit_error') %}<div class="err">{{request.args.get('deposit_error')}}</div>{% endif %}{% if request.args.get('deposit_message') %}<div class="notice">{{request.args.get('deposit_message')}}</div>{% endif %}<div class="section-title">POPULAR GAMES</div><div class="games"><a class="game" href="/arena"><span class="emoji">⚽</span><span><b>Virtual Football</b><span class="muted">Full-time & half-time 1X2</span><span class="tag">PLAY NOW →</span></span></a><a class="game" href="/aviator"><span class="emoji">✈️</span><span><b>Aviator</b><span class="muted">Watch the multiplier and cash out</span><span class="tag">PLAY NOW →</span></span></a><a class="game" href="/rugby"><span class="emoji">🏉</span><span><b>Rugby</b><span class="muted">Pick the match result</span><span class="tag">PLAY NOW →</span></span></a><a class="game" href="/velocity"><span class="emoji">🏎️</span><span><b>Velocity Car Racing</b><span class="muted">Choose your winning car</span><span class="tag">PLAY NOW →</span></span></a><a class="game" href="/dog-racing"><span class="emoji">🐕</span><span><b>Dog Racing</b><span class="muted">Pick the greyhound to finish first</span><span class="tag">PLAY NOW →</span></span></a><a class="game" href="/chicken-clash"><span class="emoji">🐓</span><span><b>Chicken Clash</b><span class="muted">Battle arena</span><span class="tag">PLAY NOW →</span></span></a><a class="game" href="/hot-7-fruit"><span class="emoji">🍒</span><span><b>Hot 7 Fruit</b><span class="muted">Fruit reel lines</span><span class="tag">SPIN NOW →</span></span></a><a class="game" href="/fortune-slots"><span class="emoji">🎰</span><span><b>Fortune Slots</b><span class="muted">Spin the reels</span><span class="tag">SPIN NOW →</span></span></a></div><section class="wallet"><div class="section-title" style="margin-top:0">MY WALLET</div><p class="muted">Request a deposit after sending payment. The admin credits your wallet only after verifying the reference.</p><form method="post" action="/deposit/request"><div class="formgrid"><label>Amount (UGX)<input class="field" type="number" name="amount" min="1000" max="10000000" step="1" required placeholder="e.g. 5000"></label><label>Payment method<input class="field" name="method" required maxlength="40" placeholder="e.g. Mobile Money"></label><label style="grid-column:1/-1">Payment reference / transaction ID<input class="field" name="reference" required maxlength="120" placeholder="Enter the payment reference from your provider"></label></div><button class="submit" style="margin-top:12px;width:100%">SUBMIT DEPOSIT REQUEST</button></form><div class="small" style="margin-top:10px">This package does not yet connect to an automatic mobile-money payment gateway. Verify payments before approving a deposit.</div></section><section class="wallet"><div class="section-title" style="margin-top:0">RECENT DEPOSIT REQUESTS</div>{% for d in deposit_requests %}<div style="padding:9px 0;border-bottom:1px solid #27486e"><b>UGX {{'%.0f'|format(d.amount)}}</b> · {{d.method}} · {{d.status|upper}}<div class="small">Reference: {{d.payment_reference}} · {{d.created_at|int}}</div></div>{% else %}<div class="small">No deposit requests yet.</div>{% endfor %}</section><section class="wallet"><div class="section-title" style="margin-top:0">OWNER / ADMIN</div><form method="post" action="/admin-auth"><label>Admin PIN<input class="field" type="password" name="pin" inputmode="numeric" maxlength="4" required placeholder="Enter admin PIN"></label><button class="submit" style="margin-top:8px;width:100%">OPEN ADMIN PANEL</button></form><div class="small" style="margin-top:8px">The admin panel is locked to the first registered admin account that claims it with the PIN.</div></section><div class="links"><a href="/logout">Log out</a><a href="/admin/deposits">Deposit administration</a><a href="/admin">Admin panel</a></div><p class="small">Account wallet is shared by all games. Game stakes reduce the wallet; confirmed winnings are returned to the same wallet.</p></main></body></html>
+</style></head><body><header class="top"><div class="logo">⚡ VIRTUAL BETTING ARENA</div><div class="bal">UGX {{'%.0f'|format(balance)}}</div></header><main class="wrap"><section class="welcome"><h1>Welcome, {{account_name}}</h1><div class="muted">One account · One wallet · Play any game and keep the same balance everywhere.</div></section>{% if request.args.get('error') %}<div class="err">{{request.args.get('error')}}</div>{% endif %}{% if request.args.get('deposit_error') %}<div class="err">{{request.args.get('deposit_error')}}</div>{% endif %}{% if request.args.get('deposit_message') %}<div class="notice">{{request.args.get('deposit_message')}}</div>{% endif %}<div class="section-title">POPULAR GAMES</div><div class="games"><a class="game" href="/arena"><span class="emoji">⚽</span><span><b>Virtual Football</b><span class="muted">Full-time & half-time 1X2</span><span class="tag">PLAY NOW →</span></span></a><a class="game" href="/aviator"><span class="emoji">✈️</span><span><b>Aviator</b><span class="muted">Watch the multiplier and cash out</span><span class="tag">PLAY NOW →</span></span></a><a class="game" href="/rugby"><span class="emoji">🏉</span><span><b>Rugby</b><span class="muted">Pick the match result</span><span class="tag">PLAY NOW →</span></span></a><a class="game" href="/velocity"><span class="emoji">🏎️</span><span><b>Velocity Car Racing</b><span class="muted">Choose your winning car</span><span class="tag">PLAY NOW →</span></span></a><a class="game" href="/chicken-clash"><span class="emoji">🐓</span><span><b>Chicken Clash</b><span class="muted">Battle arena</span><span class="tag">PLAY NOW →</span></span></a><a class="game" href="/hot-7-fruit"><span class="emoji">🍒</span><span><b>Hot 7 Fruit</b><span class="muted">Fruit reel lines</span><span class="tag">SPIN NOW →</span></span></a><a class="game" href="/fortune-slots"><span class="emoji">🎰</span><span><b>Fortune Slots</b><span class="muted">Spin the reels</span><span class="tag">SPIN NOW →</span></span></a></div><section class="wallet"><div class="section-title" style="margin-top:0">MY WALLET</div><p class="muted">Request a deposit after sending payment. The admin credits your wallet only after verifying the reference.</p><form method="post" action="/deposit/request"><div class="formgrid"><label>Amount (UGX)<input class="field" type="number" name="amount" min="1000" max="10000000" step="1" required placeholder="e.g. 5000"></label><label>Payment method<input class="field" name="method" required maxlength="40" placeholder="e.g. Mobile Money"></label><label style="grid-column:1/-1">Payment reference / transaction ID<input class="field" name="reference" required maxlength="120" placeholder="Enter the payment reference from your provider"></label></div><button class="submit" style="margin-top:12px;width:100%">SUBMIT DEPOSIT REQUEST</button></form><div class="small" style="margin-top:10px">This package does not yet connect to an automatic mobile-money payment gateway. Verify payments before approving a deposit.</div></section><section class="wallet"><div class="section-title" style="margin-top:0">RECENT DEPOSIT REQUESTS</div>{% for d in deposit_requests %}<div style="padding:9px 0;border-bottom:1px solid #27486e"><b>UGX {{'%.0f'|format(d.amount)}}</b> · {{d.method}} · {{d.status|upper}}<div class="small">Reference: {{d.payment_reference}} · {{d.created_at|int}}</div></div>{% else %}<div class="small">No deposit requests yet.</div>{% endfor %}</section><section class="wallet"><div class="section-title" style="margin-top:0">OWNER / ADMIN</div><form method="post" action="/admin-auth"><label>Admin PIN<input class="field" type="password" name="pin" inputmode="numeric" maxlength="4" required placeholder="Enter admin PIN"></label><button class="submit" style="margin-top:8px;width:100%">OPEN ADMIN PANEL</button></form><div class="small" style="margin-top:8px">The admin panel is locked to the first registered admin account that claims it with the PIN.</div></section><div class="links"><a href="/logout">Log out</a><a href="/admin/deposits">Deposit administration</a><a href="/admin">Admin panel</a></div><p class="small">Account wallet is shared by all games. Game stakes reduce the wallet; confirmed winnings are returned to the same wallet.</p></main></body></html>
 """
 
 MAIN_TEMPLATE = """
@@ -1834,7 +1820,6 @@ sync();
 </script></body></html>
 """
 
-
 ADMIN_TEMPLATE = """
 <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Master Admin</title><style>
@@ -1899,12 +1884,8 @@ Winning odds: <b>{{ "%.2f"|format(w.odds) }}x</b> — Payout: <b class="ok">UGX 
 </div><div class="card"><h3>✈️ Aviator Game</h3><p>Manage Aviator from this registered admin device.</p><a href="/aviator/admin" style="display:inline-block;padding:10px 14px;background:#7f1d1d;color:#fff;border-radius:6px;text-decoration:none;font-weight:bold">OPEN AVIATOR ADMIN</a></div></body></html>
 """
 
-
-
 # ----------------------------------------------------
 # ADDITIONAL BROWSER GAMES
-# Browser-native ports of the uploaded standalone games.
-# They use the website's existing player session, shared UGX balance and SQLite device sync.
 # ----------------------------------------------------
 EXTRA_GAME_LOCK = threading.RLock()
 EXTRA_GAME_TEMPLATES = {
@@ -1913,19 +1894,6 @@ EXTRA_GAME_TEMPLATES = {
         "subtitle": "Choose the car you think will finish first.",
         "choices": [{"id":"TOYOTA","name":"TOYOTA GT","odds":3.40,"color":"#d72d37"}, {"id":"JUGER","name":"JUGER MUSCLE","odds":3.33,"color":"#2d69d7"}, {"id":"BENZ","name":"BENZ GT-R","odds":3.47,"color":"#e6c823"}, {"id":"BMW","name":"BMW M4 COUPE","odds":3.40,"color":"#888888"}],
         "min": 50, "max": 1000, "stake_label": "Stake (UGX 50–1,000)"
-    },
-    "dog-racing": {
-        "title": "DOG RACING", "emoji": "🐕", "accent": "#fbbf24",
-        "subtitle": "Choose the greyhound that will finish first. New race and odds each round.",
-        "choices": [
-            {"id":"1","name":"Fast Thunder","odds":3.20,"color":"#d32f2f"},
-            {"id":"2","name":"Shadow Runner","odds":3.80,"color":"#1976d2"},
-            {"id":"3","name":"Blazing Comet","odds":4.50,"color":"#388e3c"},
-            {"id":"4","name":"Midnight Dash","odds":5.20,"color":"#fbc02d"},
-            {"id":"5","name":"Scarlett Oharlot","odds":2.20,"color":"#e91e63"},
-            {"id":"6","name":"Extreme Hangover","odds":5.50,"color":"#795548"}
-        ],
-        "min": 1, "max": 50000, "stake_label": "Stake (UGX)"
     },
     "chicken-clash": {
         "title": "CHICKEN CLASH", "emoji": "🐔", "accent": "#fb7185",
@@ -1952,10 +1920,8 @@ def _extra_balance(dev_id):
     return float(info.get("balance", 0)) if info else 0.0
 
 def _extra_result(game, stake, selection=None):
-    """Resolve a browser round using rules adapted from the original Pydroid games."""
     if game == "velocity":
         choices = EXTRA_GAME_TEMPLATES[game]["choices"]
-        # One car gets a race advantage, then all four are ranked with jitter.
         favored = random.choice(choices)
         scores = {c["id"]: random.uniform(0.25, 1.0) + (1.5 if c["id"] == favored["id"] else 0.0)
                   for c in choices}
@@ -1970,7 +1936,6 @@ def _extra_result(game, stake, selection=None):
                 "display": winner["name"], "order": [c["id"] for c in order]}
     if game == "chicken-clash":
         choices = EXTRA_GAME_TEMPLATES[game]["choices"]
-        # Weighted battle result approximates the original fighters' power/speed/stamina odds.
         weights = [random.uniform(0.4, 2.0) + random.uniform(0.15, 0.9) for _ in choices]
         winner = random.choices(choices, weights=weights, k=1)[0]
         picked = next((c for c in choices if c["id"] == selection), None)
@@ -1980,9 +1945,6 @@ def _extra_result(game, stake, selection=None):
                 "detail": (f"Your fighter won! Payout UGX {payout:,.0f}." if won else f"Your fighter lost. Winner: {winner['name']}."),
                 "display": winner["name"], "winner_id": winner["id"]}
     if game == "hot-7-fruit":
-        # Follow the original Pydroid3 Hot 7 Fruit flow: choose the multiplier
-        # first, spin a 3x3 grid, pay only if a row/column/diagonal matches, and
-        # keep payouts within the available demo vault above its protected floor.
         symbols = ["🍋", "🍊", "🍇", "🍉", "🍒", "🔔", "7️⃣", "🍑"]
         roll = random.random()
         mult = 5 if roll < 0.05 else (3 if roll < 0.15 else (2 if roll < 0.35 else 1))
@@ -2011,14 +1973,12 @@ def _extra_result(game, stake, selection=None):
                 "headline": f"{'🎉 WIN' if payout else 'TRY AGAIN'}{f' — {mult}x' if payout else ''}",
                 "detail": f"Matching line: {match}. Multiplier: {mult}x." if payout else "No payable matching line this spin.",
                 "reels": grid, "multiplier": mult}
-    # Fortune Slots: original rules use a 3x3 multiplier grid and the middle row wins.
     pool = [0.0, 0.0, 0.0, 0.5, 0.5, 1.0, 1.0, 2.0, 3.0, 5.0, 10.0]
     grid = [[random.choice(pool) for _ in range(3)] for _ in range(3)]
     middle = grid[1]
     matched = middle[0] == middle[1] == middle[2] and middle[0] > 0
     mult = middle[0] if matched else 0.0
     payout = round(stake * mult, 2) if matched else 0.0
-    # Keep the existing reserve protected when paying from the demo House Vault.
     available = max(0.0, float(house_vault) - PROTECTED_RESERVE)
     payout = min(payout, available)
     return {"won": payout > 0, "payout": payout,
@@ -2034,45 +1994,27 @@ EXTRA_GAME_TEMPLATE = r'''<!doctype html><html><head><meta name="viewport" conte
 <div class="card"><label for="stake">{{g.stake_label}}</label><input id="stake" class="stake" type="number" min="{{g.min}}" max="{{g.max}}" value="500"><button class="play" id="play" onclick="playGame()">{{'START RACE' if game=='velocity' else ('START BATTLE' if game=='chicken-clash' else ('SPIN FRUIT REELS' if game=='hot-7-fruit' else 'SPIN FORTUNE SLOTS'))}}</button><p class="muted" id="message">Choose your selection and play. The stake is deducted from your shared website balance.</p><div class="result" id="result"></div><div class="history" id="detail"></div></div></main>
 <script>const GAME={{game|tojson}};let selected=null;function pick(id,el){selected=id;document.querySelectorAll('.pick').forEach(x=>x.classList.remove('selected'));el.classList.add('selected')}const wait=ms=>new Promise(r=>setTimeout(r,ms));async function animateRound(){if(GAME==='velocity'){document.getElementById('raceStatus').textContent='🏁 3… 2… 1… GO!';document.querySelectorAll('.car').forEach((c,i)=>{c.style.transform='translateX('+Math.round(100+Math.random()*240)+'px)'});await wait(2300)}else if(GAME==='chicken-clash'){let fs=[...document.querySelectorAll('.fighter')];document.getElementById('battleStatus').textContent='Battle in progress!';for(let i=0;i<5;i++){fs[0].style.transform='translateX(18px) rotate(12deg)';fs[1].style.transform='translateX(-18px) rotate(-12deg)';await wait(180);fs[0].style.transform='translateX(-8px)';fs[1].style.transform='translateX(8px)';await wait(180)}await wait(250)}else{const reels=[...document.querySelectorAll('.reel')];reels.forEach(x=>x.classList.add('spin'));let symbols=GAME==='hot-7-fruit'?['🍋','🍊','🍇','🍉','🍒','🔔','7️⃣','🍑']:['❌','0.5x','1x','2x','3x','5x','10x'];let timer=setInterval(()=>reels.forEach(x=>x.textContent=symbols[Math.floor(Math.random()*symbols.length)]),70);await wait(950);clearInterval(timer);reels.forEach(x=>x.classList.remove('spin'))}}async function playGame(){const btn=document.getElementById('play'),stake=Number(document.getElementById('stake').value);if(['velocity','chicken-clash'].includes(GAME)&&!selected){document.getElementById('message').textContent='Choose a car or fighter first.';return}btn.disabled=true;document.getElementById('message').textContent='Round starting…';document.getElementById('result').textContent='';try{await animateRound();const r=await fetch('/extra-games/play',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({game:GAME,stake,selection:selected})});const d=await r.json();document.getElementById('balance').textContent='UGX '+Math.floor(d.balance||0).toLocaleString();document.getElementById('message').textContent=d.message||'';if(d.success){document.getElementById('result').textContent=d.result.headline;document.getElementById('detail').textContent=d.result.detail+'\nStake: UGX '+stake.toLocaleString()+' | Payout: UGX '+Number(d.result.payout).toLocaleString();if(d.result.reels){let flat=d.result.reels.flat();document.getElementById('reels').innerHTML=flat.map(x=>'<div class="reel">'+x+'</div>').join('');if(GAME==='fortune-slots'&&d.result.grid){document.getElementById('reels').innerHTML=d.result.reels.flat().map(x=>'<div class="reel">'+x+'</div>').join('')} }if(GAME==='velocity'){document.getElementById('raceStatus').textContent=d.result.detail;let winner=d.result.order?.[0];document.querySelectorAll('.lane').forEach(l=>{let car=l.querySelector('.car');car.style.transform='translateX('+(l.dataset.car===winner?300:80)+'px)'})}if(GAME==='chicken-clash'){document.getElementById('battleStatus').textContent=d.result.headline;document.getElementById('arena').innerHTML='<span class="fighter">🐓</span><span>🏆</span><span class="fighter">🐓</span>'}}else{document.getElementById('result').textContent='';document.getElementById('detail').textContent=''}}catch(e){document.getElementById('message').textContent='Connection error. Please try again.'}finally{btn.disabled=false}}</script></body></html>'''
 
-# ----------------------------------------------------
-# Shared automatic rounds for Velocity and Chicken Clash.
-# Timing and betting behavior follow the original Pydroid3 versions.
-# ----------------------------------------------------
 ROUND_GAME_LOCK = threading.RLock()
 ROUND_GAME_STATE = {
     "velocity": {"status":"BETTING", "round_id":1, "phase_started":time.time(), "phase_duration":10.0,
                   "bets":{}, "winner":None, "order":[], "message":"PLACE YOUR BETS (10s)", "history":[], "player_results":{}},
     "chicken-clash": {"status":"BETTING", "round_id":1, "phase_started":time.time(), "phase_duration":15.0,
-                      "bets":{}, "winner":None, "order":[], "message":"BETTING OPEN (15s)", "history":[], "player_results":{}},
-    "dog-racing": {"status":"BETTING", "round_id":2193, "phase_started":time.time(), "phase_duration":15.0,
-                   "bets":{}, "winner":None, "order":[], "message":"BETTING OPEN (15s)", "history":[], "player_results":{},
-                   "track":"CRAWFORD PARK (DAY) 720M"}
+                      "bets":{}, "winner":None, "order":[], "message":"BETTING OPEN (15s)", "history":[], "player_results":{}}
 }
 ROUND_GAME_CONFIG = {
     "velocity": {"betting":10.0, "action":8.0, "result":4.0, "margin":0.20},
-    "chicken-clash": {"betting":15.0, "action":6.0, "result":4.0, "margin":0.30},
-    "dog-racing": {"betting":15.0, "action":10.0, "result":8.0, "margin":0.10}
+    "chicken-clash": {"betting":15.0, "action":6.0, "result":4.0, "margin":0.30}
 }
 
 def _choose_round_winner(game, round_id):
     rng = random.Random((int(round_id) * 982451653) + (401 if game == 'velocity' else 809))
     choices = EXTRA_GAME_TEMPLATES[game]['choices']
     if game == 'velocity':
-        # The original game gives one randomly selected car a performance boost,
-        # then ranks the entire field by the race simulation result.
         boosted = rng.choice(choices)
         scores = {c['id']: rng.uniform(0.0, 1.0) + (1.4 if c['id'] == boosted['id'] else 0.0)
                   for c in choices}
         order = sorted(choices, key=lambda c: scores[c['id']], reverse=True)
         return order[0]['id'], [c['id'] for c in order]
-    if game == 'dog-racing':
-        # Simulate six greyhounds accelerating independently; the shared race ID
-        # makes every connected player see the same finish order.
-        scores = {c['id']: sum(rng.uniform(1.0, 4.5) for _ in range(24)) + rng.uniform(0, 3)
-                  for c in choices}
-        order = sorted(choices, key=lambda c: scores[c['id']], reverse=True)
-        return order[0]['id'], [c['id'] for c in order]
-    # Original Chicken Clash chooses by fighter power, speed and stamina, with jitter.
     stats = {"RED ROOSTER":(85,70,80), "BLUE BRAWLER":(90,65,85),
              "YELLOW JET":(65,95,70), "BLACK SHADOW":(80,80,75)}
     weights = []
@@ -2125,7 +2067,7 @@ def _round_game_loop(game):
                 elapsed=now-state['phase_started']
                 if state['status']=='BETTING' and elapsed >= cfg['betting']:
                     state['winner'], state['order'] = _choose_round_winner(game,state['round_id'])
-                    state['status']='RACING' if game in ('velocity','dog-racing') else 'BATTLE'
+                    state['status']='RACING' if game=='velocity' else 'BATTLE'
                     state['phase_started']=now; state['phase_duration']=cfg['action']
                     state['message']='RACE STARTED — BETS LOCKED' if game=='velocity' else 'BATTLE IN PROGRESS — BETS LOCKED'
                 elif state['status'] in ('RACING','BATTLE') and elapsed >= cfg['action']:
@@ -2136,10 +2078,6 @@ def _round_game_loop(game):
                     state['status']='BETTING'; state['phase_started']=now
                     state['phase_duration']=cfg['betting']; state['bets']={}
                     state['winner']=None; state['order']=[]
-                    if game == 'dog-racing':
-                        state['track'] = random.choice(["CRAWFORD PARK (DAY) 720M", "CRAWFORD PARK (NIGHT) 720M", "SUMMERSET PARK 720M"])
-                        for runner in EXTRA_GAME_TEMPLATES['dog-racing']['choices']:
-                            runner['odds'] = round(random.uniform(1.8, 5.6), 2)
                     state['message']=f"PLACE YOUR BETS ({int(cfg['betting'])}s)" if game=='velocity' else f"BETTING OPEN ({int(cfg['betting'])}s)"
             time.sleep(0.15)
         except Exception as exc:
@@ -2148,13 +2086,13 @@ def _round_game_loop(game):
 
 if not app.config.get('ROUND_GAME_LOOPS_STARTED'):
     app.config['ROUND_GAME_LOOPS_STARTED']=True
-    for _game in ('velocity','chicken-clash','dog-racing'):
+    for _game in ('velocity','chicken-clash'):
         threading.Thread(target=_round_game_loop, args=(_game,), daemon=True, name=f'{_game}-round-loop').start()
 
 ROUND_GAME_TEMPLATE = r'''<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{g.title}}</title><style>
-*{box-sizing:border-box}body{margin:0;background:#07152b;color:#fff;font-family:Arial;padding:12px}main{max-width:680px;margin:auto}.card{background:#102542;border:1px solid #27486e;border-radius:12px;padding:13px;margin:9px 0}.top{display:flex;justify-content:space-between;gap:8px;align-items:center}.brand{font-weight:900;color:{{g.accent}}}.bal{color:#86efac;font-weight:900}.nav{color:#b7c7dc;text-decoration:none;font-size:12px}.phase{text-align:center;font-size:19px;font-weight:900;color:{{g.accent}}}.timer{text-align:center;font-size:30px;font-weight:900}.muted{color:#b4c6dc;font-size:12px}.choices{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.pick{background:#09182e;color:white;border:1px solid #345579;border-radius:9px;padding:11px;cursor:pointer;text-align:center}.pick:disabled{opacity:.45}.pick b{display:block;margin-bottom:4px}.stake{width:100%;padding:12px;background:#07152b;color:white;border:1px solid #345579;border-radius:8px;font-size:16px}.lane{background:#07152b;border-radius:8px;padding:7px;margin:7px 0;overflow:hidden}.car{display:inline-block;font-size:25px;transition:transform .6s linear}.arena{display:flex;justify-content:space-around;align-items:center;font-size:45px;min-height:130px;background:radial-gradient(circle,#243e5f,#07152b);border-radius:9px}.fighter{display:inline-block;transition:transform .2s}.result{background:#082f24;color:#a7f3d0;padding:10px;border-radius:8px;white-space:pre-wrap}.loss{background:#3a1722;color:#ffc5ce}.small{font-size:12px;color:#9eb4ce}</style></head><body><main><div class="card top"><a class="nav" href="/">← GAME LOBBY</a><span class="brand">{{g.emoji}} {{g.title}}</span><span class="bal" id="balance">UGX {{'%.0f'|format(balance)}}</span></div><div class="card"><div class="phase" id="phase">BETTING OPEN</div><div class="timer" id="timer">--</div><div class="muted" id="message" style="text-align:center">Connecting to shared round…</div><div class="small" style="text-align:center;margin-top:5px">Round <span id="round">1</span> · All players share the same result</div></div>{% if game=='velocity' %}<div class="card"><b>🏁 Live race track</b><div id="track">{% for c in g.choices %}<div class="lane" data-id="{{c.id}}"><span class="car" style="color:{{c.color}}">🏎️ {{c.name}}</span></div>{% endfor %}</div></div>{% elif game=='dog-racing' %}<div class="card"><b>🐕 Greyhound track</b><div class="muted" id="trackName">CRAWFORD PARK (DAY) 720M</div><div id="track">{% for c in g.choices %}<div class="lane" data-id="{{c.id}}"><span class="car" style="color:{{c.color}}">🐕 {{c.name}} <small>#{{c.id}}</small></span></div>{% endfor %}</div></div>{% else %}<div class="card"><b>⚔️ Battle arena</b><div class="arena"><span class="fighter" id="fighter1">🐓</span><span>⚔️</span><span class="fighter" id="fighter2">🐓</span></div><div class="muted" id="battleText" style="text-align:center">Fighters are entering the arena.</div></div>{% endif %}<div class="card"><b>Place bets before the round starts</b><p class="muted">You can bet on more than one {{'car' if game=='velocity' else ('greyhound' if game=='dog-racing' else 'fighter')}} in the same betting window. Each selection can be bet once per round.</p><label>Stake (UGX)<input id="stake" class="stake" type="number" min="1" max="{{g.max}}" value="100"></label><div class="choices" style="margin-top:10px">{% for c in g.choices %}<button class="pick" id="pick-{{c.id}}" onclick="place('{{c.id}}')" style="border-top:4px solid {{c.color}}"><b>{{c.name}}</b><span id="odds-{{c.id}}">{{'%.2f'|format(c.odds)}}x odds</span><div class="small" id="bet-{{c.id}}">Not selected</div></button>{% endfor %}</div><div id="lastResult" class="result" style="display:none;margin-top:10px"></div></div><p class="small"><a class="nav" href="/">Return to lobby</a></p></main><script>
+*{box-sizing:border-box}body{margin:0;background:#07152b;color:#fff;font-family:Arial;padding:12px}main{max-width:680px;margin:auto}.card{background:#102542;border:1px solid #27486e;border-radius:12px;padding:13px;margin:9px 0}.top{display:flex;justify-content:space-between;gap:8px;align-items:center}.brand{font-weight:900;color:{{g.accent}}}.bal{color:#86efac;font-weight:900}.nav{color:#b7c7dc;text-decoration:none;font-size:12px}.phase{text-align:center;font-size:19px;font-weight:900;color:{{g.accent}}}.timer{text-align:center;font-size:30px;font-weight:900}.muted{color:#b4c6dc;font-size:12px}.choices{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.pick{background:#09182e;color:white;border:1px solid #345579;border-radius:9px;padding:11px;cursor:pointer;text-align:center}.pick:disabled{opacity:.45}.pick b{display:block;margin-bottom:4px}.stake{width:100%;padding:12px;background:#07152b;color:white;border:1px solid #345579;border-radius:8px;font-size:16px}.lane{background:#07152b;border-radius:8px;padding:7px;margin:7px 0;overflow:hidden}.car{display:inline-block;font-size:25px;transition:transform .6s linear}.arena{display:flex;justify-content:space-around;align-items:center;font-size:45px;min-height:130px;background:radial-gradient(circle,#243e5f,#07152b);border-radius:9px}.fighter{display:inline-block;transition:transform .2s}.result{background:#082f24;color:#a7f3d0;padding:10px;border-radius:8px;white-space:pre-wrap}.loss{background:#3a1722;color:#ffc5ce}.small{font-size:12px;color:#9eb4ce}</style></head><body><main><div class="card top"><a class="nav" href="/">← GAME LOBBY</a><span class="brand">{{g.emoji}} {{g.title}}</span><span class="bal" id="balance">UGX {{'%.0f'|format(balance)}}</span></div><div class="card"><div class="phase" id="phase">BETTING OPEN</div><div class="timer" id="timer">--</div><div class="muted" id="message" style="text-align:center">Connecting to shared round…</div><div class="small" style="text-align:center;margin-top:5px">Round <span id="round">1</span> · All players share the same result</div></div>{% if game=='velocity' %}<div class="card"><b>🏁 Live race track</b><div id="track">{% for c in g.choices %}<div class="lane" data-id="{{c.id}}"><span class="car" style="color:{{c.color}}">🏎️ {{c.name}}</span></div>{% endfor %}</div></div>{% else %}<div class="card"><b>⚔️ Battle arena</b><div class="arena"><span class="fighter" id="fighter1">🐓</span><span>⚔️</span><span class="fighter" id="fighter2">🐓</span></div><div class="muted" id="battleText" style="text-align:center">Fighters are entering the arena.</div></div>{% endif %}<div class="card"><b>Place bets before the round starts</b><p class="muted">You can bet on more than one {{'car' if game=='velocity' else 'fighter'}} in the same betting window. Each selection can be bet once per round.</p><label>Stake (UGX)<input id="stake" class="stake" type="number" min="1" max="{{g.max}}" value="100"></label><div class="choices" style="margin-top:10px">{% for c in g.choices %}<button class="pick" id="pick-{{c.id}}" onclick="place('{{c.id}}')" style="border-top:4px solid {{c.color}}"><b>{{c.name}}</b><span>{{'%.2f'|format(c.odds)}}x odds</span><div class="small" id="bet-{{c.id}}">Not selected</div></button>{% endfor %}</div><div id="lastResult" class="result" style="display:none;margin-top:10px"></div></div><p class="small"><a class="nav" href="/">Return to lobby</a></p></main><script>
 const GAME={{game|tojson}};const wait=ms=>new Promise(r=>setTimeout(r,ms));let lastRound=-1;let phaseSeen='';async function place(selection){let stake=Number(document.getElementById('stake').value||0);try{let r=await fetch('/round-game/bet',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({game:GAME,selection,stake})});let d=await r.json();document.getElementById('message').textContent=d.message||'';if(d.balance!==undefined)document.getElementById('balance').textContent='UGX '+Math.floor(d.balance).toLocaleString();sync()}catch(e){document.getElementById('message').textContent='Connection error. Try again.'}}
-function draw(s){document.getElementById('balance').textContent='UGX '+Math.floor(s.balance||0).toLocaleString();(s.choices||[]).forEach(c=>{let o=document.getElementById('odds-'+c.id);if(o)o.textContent=Number(c.odds).toFixed(2)+'x odds'});document.getElementById('phase').textContent=s.status==='BETTING'?'BETTING OPEN':s.status==='RACING'?(GAME==='dog-racing'?'🐕 DOGS RACING LIVE':'🏁 RACE IN PROGRESS'):s.status==='BATTLE'?'⚔️ BATTLE IN PROGRESS':'ROUND RESULT';document.getElementById('timer').textContent=Math.max(0,Math.ceil(s.seconds_left||0))+'s';document.getElementById('message').textContent=s.message||'';document.getElementById('round').textContent=s.round_id;document.querySelectorAll('.pick').forEach(b=>b.disabled=s.status!=='BETTING');document.querySelectorAll('[id^="bet-"]').forEach(e=>e.textContent='Not selected');(s.my_bets||[]).forEach(b=>{let el=document.getElementById('bet-'+b.selection);if(el)el.textContent='BET PLACED · UGX '+Number(b.stake).toLocaleString()});if(GAME==='dog-racing'&&document.getElementById('trackName'))document.getElementById('trackName').textContent=(s.track||'TRACK')+' · Race '+s.round_id;if(s.status==='RACING'&&(GAME==='velocity'||GAME==='dog-racing')){let rank=s.order||[];document.querySelectorAll('.lane').forEach(l=>{let car=l.querySelector('.car');if(GAME==='dog-racing'){let p=(s.progress||{})[l.dataset.id]||0;car.style.transform='translateX('+Math.max(0,p*2.5)+'px)'}else{let idx=rank.indexOf(l.dataset.id);car.style.transform='translateX('+Math.max(5,250-idx*55)+'px)'}})}else if(s.status==='BETTING'&&(GAME==='velocity'||GAME==='dog-racing')){document.querySelectorAll('.car').forEach(c=>c.style.transform='translateX(0px)')}if(GAME==='chicken-clash'){let f1=document.getElementById('fighter1'),f2=document.getElementById('fighter2');if(s.status==='BATTLE'){f1.style.transform='translateX(24px) rotate(14deg)';f2.style.transform='translateX(-24px) rotate(-14deg)';document.getElementById('battleText').textContent='The fighters are exchanging attacks!'}else{f1.style.transform='';f2.style.transform='';document.getElementById('battleText').textContent=s.status==='RESULT'?'Winner: '+(s.winner_name||'—'):'Fighters are ready'}}let res=document.getElementById('lastResult');if(s.last_result){res.style.display='block';res.className='result '+(s.last_result.won?'':'loss');res.textContent=(s.last_result.won?'YOU WON':'ROUND SETTLED')+' · '+s.last_result.summary+'\nStake: UGX '+Number(s.last_result.stake||0).toLocaleString()+' · Payout: UGX '+Number(s.last_result.payout||0).toLocaleString()+' · Net: UGX '+Number(s.last_result.net||0).toLocaleString()}if(lastRound!==s.round_id){lastRound=s.round_id}}
+function draw(s){document.getElementById('balance').textContent='UGX '+Math.floor(s.balance||0).toLocaleString();document.getElementById('phase').textContent=s.status==='BETTING'?'BETTING OPEN':s.status==='RACING'?'🏁 RACE IN PROGRESS':s.status==='BATTLE'?'⚔️ BATTLE IN PROGRESS':'ROUND RESULT';document.getElementById('timer').textContent=Math.max(0,Math.ceil(s.seconds_left||0))+'s';document.getElementById('message').textContent=s.message||'';document.getElementById('round').textContent=s.round_id;document.querySelectorAll('.pick').forEach(b=>b.disabled=s.status!=='BETTING');document.querySelectorAll('[id^="bet-"]').forEach(e=>e.textContent='Not selected');(s.my_bets||[]).forEach(b=>{let el=document.getElementById('bet-'+b.selection);if(el)el.textContent='BET PLACED · UGX '+Number(b.stake).toLocaleString()});if(s.status==='RACING'&&GAME==='velocity'){let rank=s.order||[];document.querySelectorAll('.lane').forEach(l=>{let idx=rank.indexOf(l.dataset.id);l.querySelector('.car').style.transform='translateX('+Math.max(5,250-idx*55)+'px)'})}else if(s.status==='BETTING'&&GAME==='velocity'){document.querySelectorAll('.car').forEach(c=>c.style.transform='translateX(0px)')}if(GAME==='chicken-clash'){let f1=document.getElementById('fighter1'),f2=document.getElementById('fighter2');if(s.status==='BATTLE'){f1.style.transform='translateX(24px) rotate(14deg)';f2.style.transform='translateX(-24px) rotate(-14deg)';document.getElementById('battleText').textContent='The fighters are exchanging attacks!'}else{f1.style.transform='';f2.style.transform='';document.getElementById('battleText').textContent=s.status==='RESULT'?'Winner: '+(s.winner_name||'—'):'Fighters are ready'}}let res=document.getElementById('lastResult');if(s.last_result){res.style.display='block';res.className='result '+(s.last_result.won?'':'loss');res.textContent=(s.last_result.won?'YOU WON':'ROUND SETTLED')+' · '+s.last_result.summary+'\nStake: UGX '+Number(s.last_result.stake||0).toLocaleString()+' · Payout: UGX '+Number(s.last_result.payout||0).toLocaleString()+' · Net: UGX '+Number(s.last_result.net||0).toLocaleString()}if(lastRound!==s.round_id){lastRound=s.round_id}}
 function sync(){fetch('/round-game/state?game='+encodeURIComponent(GAME)).then(r=>r.json()).then(draw).catch(()=>{})}setInterval(sync,500);sync();
 </script></body></html>'''
 
@@ -2165,52 +2103,12 @@ def round_game_state():
     dev_id=session.get('device_id'); info=connected_devices.get(dev_id,{'balance':0})
     with ROUND_GAME_LOCK:
         st=ROUND_GAME_STATE[game]
-        # Request-side watchdog: some hosted WSGI restarts can leave a daemon
-        # loop absent or delayed. Advance overdue phases here as well, so a
-        # browser polling the game can never remain at BETTING 0s indefinitely.
-        now=time.time()
-        for _ in range(4):
-            elapsed=now-st['phase_started']
-            if st['status']=='BETTING' and elapsed >= ROUND_GAME_CONFIG[game]['betting']:
-                st['winner'], st['order'] = _choose_round_winner(game, st['round_id'])
-                st['status']='RACING' if game in ('velocity','dog-racing') else 'BATTLE'
-                st['phase_started']=now
-                st['phase_duration']=ROUND_GAME_CONFIG[game]['action']
-                st['message']='RACE STARTED — BETS LOCKED' if game in ('velocity','dog-racing') else 'BATTLE IN PROGRESS — BETS LOCKED'
-            elif st['status'] in ('RACING','BATTLE') and elapsed >= ROUND_GAME_CONFIG[game]['action']:
-                st['status']='RESULT'; st['phase_started']=now
-                st['phase_duration']=ROUND_GAME_CONFIG[game]['result']
-                try:
-                    _settle_round_game(game, st)
-                except Exception:
-                    app.logger.exception('Request-side settlement recovery failed for %s', game)
-                    st['message']='RESULT — settlement recovery required; please contact admin'
-            elif st['status']=='RESULT' and elapsed >= ROUND_GAME_CONFIG[game]['result']:
-                st['round_id'] += 1
-                st['status']='BETTING'; st['phase_started']=now
-                st['phase_duration']=ROUND_GAME_CONFIG[game]['betting']; st['bets']={}
-                st['winner']=None; st['order']=[]
-                if game == 'dog-racing':
-                    st['track']=random.choice(['CRAWFORD PARK (DAY) 720M','CRAWFORD PARK (NIGHT) 720M','SUMMERSET PARK 720M'])
-                    for runner in EXTRA_GAME_TEMPLATES['dog-racing']['choices']:
-                        runner['odds']=round(random.uniform(1.8,5.6),2)
-                st['message']=f"PLACE YOUR BETS ({int(ROUND_GAME_CONFIG[game]['betting'])}s)" if game=='velocity' else f"BETTING OPEN ({int(ROUND_GAME_CONFIG[game]['betting'])}s)"
-            else:
-                break
         elapsed=time.time()-st['phase_started']
-        race_progress={}
-        if game == 'dog-racing' and st['status'] == 'RACING':
-            action_duration=ROUND_GAME_CONFIG['dog-racing']['action']
-            for rank, runner_id in enumerate(st.get('order', [])):
-                pace=max(0.78, 1.10-rank*0.035)
-                race_progress[runner_id]=min(88, round((elapsed/action_duration)*88*pace, 1))
         my_bets=[{'selection':sel,'stake':b['stake'],'odds':b['odds']} for sel,b in st['bets'].get(dev_id,{}).items()]
         winner_name=next((c['name'] for c in EXTRA_GAME_TEMPLATES[game]['choices'] if c['id']==st['winner']),None)
         return jsonify({'success':True,'game':game,'status':st['status'],'round_id':st['round_id'],
                         'seconds_left':max(0,st['phase_duration']-elapsed),'message':st['message'],
                         'winner_name':winner_name,'order':st['order'],'history':st['history'],
-                        'track':st.get('track',''),'progress':race_progress,
-                        'choices':[{'id':c['id'],'name':c['name'],'odds':c['odds'],'color':c['color']} for c in EXTRA_GAME_TEMPLATES[game]['choices']],
                         'my_bets':my_bets,'last_result':st['player_results'].get(dev_id),
                         'balance':float(info.get('balance',0))})
 
@@ -2242,11 +2140,6 @@ def round_game_bet():
 def velocity_page():
     dev_id=session.get('device_id'); info=connected_devices.get(dev_id,{"balance":0})
     return render_template_string(ROUND_GAME_TEMPLATE, g=EXTRA_GAME_TEMPLATES['velocity'], game='velocity', balance=info.get('balance',0))
-
-@app.route('/dog-racing')
-def dog_racing_page():
-    dev_id=session.get('device_id'); info=connected_devices.get(dev_id,{"balance":0})
-    return render_template_string(ROUND_GAME_TEMPLATE, g=EXTRA_GAME_TEMPLATES['dog-racing'], game='dog-racing', balance=info.get('balance',0))
 
 @app.route('/chicken-clash')
 def chicken_clash_page():
@@ -2289,7 +2182,6 @@ def extra_games_play():
                 info['balance']=round(float(info.get('balance',0))+payout,2)
                 sync_device_to_db(dev_id)
         try:
-            # Keep the portal's shared demo accounting aware of these game rounds.
             global house_vault, game_profit
             net = round(stake - payout, 2)
             house_vault = round(max(PROTECTED_RESERVE, house_vault + net), 2)
@@ -2305,4 +2197,4 @@ def extra_games_play():
 
 if __name__ == '__main__':
     init_db()
-    app.run(host='0.0.0.0', port=5961, debug=False)
+    app.run(host='0.0.0.0', port=5961, debug=False)a
