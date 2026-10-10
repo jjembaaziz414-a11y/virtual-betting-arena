@@ -485,6 +485,14 @@ def index():
         return redirect('/arena')
     return redirect('/login')
 
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    return "<h3>Login Page</h3><p>Please use your application's login form template or interface here.</p>"
+
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    return "<h3>Register Page</h3><p>Please use your application's registration form template or interface here.</p>"
+
 @app.before_request
 def track_device():
     session.permanent = True
