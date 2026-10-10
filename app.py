@@ -483,7 +483,8 @@ def ensure_device(dev_id=None):
 def index():
     if session.get('account_id'):
         return redirect(url_for('arena_page'))
-    return redirect(url_for('login'))
+    # Fallback to direct redirect or render if login route varies
+    return redirect('/login')
 
 @app.before_request
 def track_device():
@@ -512,7 +513,7 @@ def track_device():
     )
     if not session.get('account_id') and any(path == item or path.startswith(item) for item in protected):
         if request.method == 'GET' and not request.is_json:
-            return redirect(url_for('login', next=path))
+            return redirect('/login')
         return jsonify({'success': False, 'message': 'Please log in to use your shared player account.'}), 401
     if not session.get('account_id'):
         session.pop('device_id', None)
@@ -841,4 +842,4 @@ def settle_round_if_needed(round_data):
         settled_rounds.add(round_idx)
         with get_db() as conn:
             conn.execute("INSERT OR IGNORE INTO settled_rounds (round_idx) VALUES (?)", (round_idx,))
-            conn.commit()
+            conn.commit()w
