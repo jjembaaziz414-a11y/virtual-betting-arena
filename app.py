@@ -1252,4 +1252,581 @@ def aviator_loop():
                 pass
             time.sleep(2)
 
-# Start only one
+# Start only one game loop in the single-worker Render deployment.[cite: 18, 20]
+if not app.config.get("AVIATOR_LOOP_STARTED"):
+    app.config["AVIATOR_LOOP_STARTED"] = True
+    threading.Thread(target=aviator_loop, daemon=True, name="aviator-loop").start()
+
+AVIATOR_TEMPLATE = r'''<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Aviator | Virtual Betting Arena</title>
+<style>body{margin:0;background:#0f141c;color:#fff;font-family:Arial,sans-serif;padding:12px}main{max-width:500px;margin:auto}.top,.card{background:#182232;border:1px solid #27354f;border-radius:10px;padding:12px;margin-bottom:10px}.top{display:flex;justify-content:space-between;align-items:center}.brand{color:#ef4444;font-weight:bold;font-size:20px}.bal{color:#4ade80;font-weight:bold}.history{display:flex;gap:6px;overflow:auto;margin:10px 0}.chip{background:#202e43;padding:6px 9px;border-radius:6px;white-space:nowrap;color:#4ade80;font-size:12px}.flight{height:190px;background:#090d14;border:2px solid #27354f;border-radius:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;margin-bottom:10px}.mult{font-size:40px;font-weight:bold}.muted{color:#94a3b8;font-size:12px}.panel{background:#182232;border:1px solid #27354f;padding:12px;border-radius:10px;margin-bottom:10px}.line{display:flex;justify-content:space-between;align-items:center;gap:8px}.stake{width:120px;padding:9px;background:#090d14;color:#facc15;border:1px solid #27354f;border-radius:6px;font-size:16px}.quick{display:flex;gap:5px;margin:8px 0}.quick button{flex:1;background:#27354f;color:#fff;border:0;border-radius:5px;padding:8px}.action{width:100%;padding:12px;border:0;border-radius:7px;background:#22c55e;color:#fff;font-size:16px;font-weight:bold}.action.cash{background:#eab308;color:#111}.result{background:#090d14;border:1px dashed #eab308;padding:8px;text-align:center;border-radius:6px;margin:8px 0;font-size:13px}.nav{display:flex;gap:8px}.nav a{flex:1;text-align:center;padding:10px;background:#27354f;border-radius:7px;color:#fff;text-decoration:none;font-size:13px}</style></head><body><main>
+<div class="top"><span class="brand">✈ AVIATOR</span><span class="bal" id="bal">UGX {{ '%.0f'|format(balance) }}</span></div>
+<div class="nav"><a href="/">Game Lobby</a><a href="/arena">Football</a></div>
+<div class="history" id="history"></div><div class="flight"><div style="font-size:27px">✈️</div><div class="mult" id="mult">1.00x</div><div class="muted" id="msg">Waiting for next round</div></div><div class="result" id="result">Welcome to Aviator.</div>
+{% for n in [1,2] %}<div class="panel"><div class="line"><b>Bet {{n}} stake (UGX)</b><input class="stake" id="stake{{n}}" type="number" min="1" value="500"></div><div class="quick">{% for a in [500,1000,5000,10000] %}<button onclick="document.getElementById('stake{{n}}').value={{a}}">{{'{:,}'.format(a)}}</button>{% endfor %}</div><button class="action" id="btn{{n}}" onclick="act({{n}})">BET</button></div>{% endfor %}
+</main><script>
+function money(v){return 'UGX '+Math.floor(Number(v||0)).toLocaleString();}
+function act(panel){const b=document.getElementById('btn'+panel);const action=b.dataset.action==='cashout'?'cashout':'bet';const amount=Number(document.getElementById('stake'+panel).value||500);fetch('/aviator/command',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,panel,amount})}).then(r=>r.json()).then(draw).catch(()=>{});}
+function draw(s){document.getElementById('bal').textContent=money(s.balance);document.getElementById('mult').textContent=Number(s.multiplier||1).toFixed(2)+'x';document.getElementById('msg').textContent=s.message;document.getElementById('result').textContent=s.last_result||'';document.getElementById('history').innerHTML=(s.history||[]).map(h=>`<span class="chip">${Number(h).toFixed(2)}x</span>`).join('');[1,2].forEach(n=>{let b=document.getElementById('btn'+n);if(s.status==='RUNNING'&&s['bet_active_'+n]&&!s['cashed_out_'+n]){b.textContent='STOP & COLLECT';b.className='action cash';b.dataset.action='cashout';}else if(s.status==='WAITING'&&s['bet_active_'+n]){b.textContent='BET QUEUED';b.className='action';b.dataset.action='queued';}else{b.textContent='BET';b.className='action';b.dataset.action='bet';}})}
+function sync(){fetch('/aviator/state').then(r=>r.json()).then(draw).catch(()=>{});}setInterval(sync,400);sync();
+</script></body></html>'''
+
+@app.route('/aviator')
+def aviator_page():
+    dev_id = session.get('device_id')
+    info = connected_devices.get(dev_id, {"balance": 0})
+    return render_template_string(AVIATOR_TEMPLATE, balance=info.get("balance", 0))
+
+@app.route('/aviator/state')
+def aviator_state():
+    dev_id = session.get('device_id')
+    info = connected_devices.get(dev_id, {"balance": 0})
+    with aviator_lock:
+        ap = aviator_player(dev_id)
+        return jsonify({**aviator_game, **ap, "balance": info.get("balance", 0)})
+
+@app.route('/aviator/command', methods=['POST'])
+def aviator_command():
+    global aviator_house_balance, aviator_net_profit
+    dev_id = session.get('device_id')
+    info = connected_devices.get(dev_id)
+    if not info:
+        return jsonify({"error": "Device account not found"}), 400
+    data = request.get_json(silent=True) or {}
+    action = data.get('action')
+    try: panel = int(data.get('panel', 1)); amount = float(data.get('amount', 500))
+    except (ValueError, TypeError): return jsonify({"error": "Invalid bet"}), 400
+    if panel not in (1, 2): return jsonify({"error": "Invalid bet panel"}), 400
+    with aviator_lock:
+        ap = aviator_player(dev_id)
+        if action == 'bet':
+            if aviator_game['status'] != 'WAITING': ap['last_result'] = 'Round already started. Wait for the next round.'
+            elif amount <= 0 or amount > info['balance']: ap['last_result'] = 'Invalid stake or insufficient balance.'
+            elif ap[f'bet_active_{panel}']: ap['last_result'] = f'Bet #{panel} is already queued.'
+            else:
+                other = 2 if panel == 1 else 1
+                already_reserved = ap[f'stake_{other}'] if ap[f'bet_active_{other}'] else 0
+                if amount + already_reserved > info['balance']:
+                    ap['last_result'] = 'Not enough balance for both bets.'
+                else:
+                    ap[f'stake_{panel}'] = amount; ap[f'bet_active_{panel}'] = True; ap[f'cashed_out_{panel}'] = False
+                    ap['last_result'] = f'Bet #{panel} queued: UGX {amount:,.0f}'
+                    save_aviator_state()
+        elif action == 'cashout':
+            if aviator_game['status'] == 'RUNNING' and ap[f'bet_active_{panel}'] and not ap[f'cashed_out_{panel}']:
+                stake = float(ap[f'stake_{panel}'])
+                payout = round(stake * aviator_game['multiplier'], 2)
+                if not ap.get(f'charged_{panel}', False):
+                    ap['last_result'] = 'This bet was not charged at take-off and cannot be collected.'
+                    ap[f'bet_active_{panel}'] = False
+                else:
+                    with lock:
+                        info['balance'] = round(info['balance'] + payout, 2)
+                        sync_device_to_db(dev_id)
+                    aviator_house_balance = round(aviator_house_balance - payout, 2)
+                    aviator_net_profit = round(aviator_net_profit - payout, 2)
+                    save_system_metric('aviator_house_balance', aviator_house_balance)
+                    save_system_metric('aviator_net_profit', aviator_net_profit)
+                    ap[f'cashed_out_{panel}'] = True
+                    ap[f'charged_{panel}'] = False
+                    ap['last_result'] = f'Collected at {aviator_game["multiplier"]:.2f}x: {payout:,.0f} UGX'
+                    save_aviator_state()
+            else: ap['last_result'] = 'Cannot collect this bet now.'
+        else: ap['last_result'] = 'Unknown action.'
+        info = connected_devices.get(dev_id, {"balance": 0})
+        return jsonify({**aviator_game, **ap, "balance": info.get("balance", 0)})
+
+@app.route('/aviator/admin')
+def aviator_admin():
+    dev_id = session.get('device_id')
+    if not session.get('is_admin') or dev_id != master_admin_device_id:
+        return redirect(url_for('portal', error='Enter PIN 4422 on the registered admin device first.'))
+    with aviator_lock:
+        rows = []
+        for pid, ap in aviator_players.items():
+            d = connected_devices.get(pid, {})
+            rows.append((d.get('number', '?'), d.get('balance', 0), ap.get('last_result', '')))
+    return render_template_string('''<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Aviator Admin</title><style>body{background:#101820;color:white;font-family:Arial;padding:20px}.card{max-width:700px;margin:auto;background:#1c2a39;padding:20px;border-radius:12px}a{color:#6ee7b7}td,th{padding:8px;border-bottom:1px solid #405166;text-align:left}</style></head><body><div class="card"><h2>✈ Aviator Admin</h2><p>Access is restricted to the same registered device as Football Admin and requires PIN 4422.</p><p>House balance: <b>UGX {{'%.2f'|format(house)}}</b></p><p>Net house profit/loss: <b>UGX {{'%.2f'|format(profit)}}</b></p><p>Round: <b>{{status}}</b> — {{message}}</p><table><tr><th>Device</th><th>Balance</th><th>Last Aviator result</th></tr>{% for n,b,r in rows %}<tr><td>{{n}}</td><td>UGX {{'%.2f'|format(b)}}</td><td>{{r}}</td></tr>{% endfor %}</table><p><a href="/admin">Football Admin</a> · <a href="/">Lobby</a></p></div></body></html>''', house=aviator_house_balance, profit=aviator_net_profit, status=aviator_game['status'], message=aviator_game['message'], rows=rows)
+
+
+# ----------------------------------------------------
+# RUGBY DEMO GAME — separate selection, shared player balance[cite: 18]
+# ----------------------------------------------------
+RUGBY_CYCLE_SECONDS = 45
+RUGBY_BETTING_SECONDS = 15
+rugby_lock = threading.RLock()
+rugby_bets = {}
+rugby_settled = set()
+RUGBY_TEAMS = [("Uganda Cranes", "Kenya Simbas"), ("South Africa", "New Zealand"),
+               ("England", "Ireland"), ("France", "Wales"), ("Australia", "Fiji")]
+
+def rugby_round_data():
+    now = time.time()
+    idx = int(now // RUGBY_CYCLE_SECONDS)
+    elapsed = now % RUGBY_CYCLE_SECONDS
+    rng = random.Random(87000 + idx)
+    home, away = RUGBY_TEAMS[rng.randrange(len(RUGBY_TEAMS))]
+    # Fixed result per round, shared by all players.[cite: 18]
+    home_score = rng.choice([7, 12, 14, 17, 19, 21, 24, 28, 31, 35])
+    away_score = rng.choice([0, 5, 7, 10, 14, 17, 21, 24, 28, 33])
+    if home_score > away_score: result = "1"
+    elif home_score < away_score: result = "2"
+    else: result = "X"
+    phase = "BETTING" if elapsed < RUGBY_BETTING_SECONDS else "LIVE"
+    # Settle the previous round once everyone has moved into the next round.[cite: 18]
+    previous = idx - 1
+    if previous >= 0 and previous not in rugby_settled:
+        with rugby_lock:
+            if previous not in rugby_settled:
+                old_rng = random.Random(87000 + previous)
+                old_rng.randrange(len(RUGBY_TEAMS))
+                old_home = old_rng.choice([7, 12, 14, 17, 19, 21, 24, 28, 31, 35])
+                old_away = old_rng.choice([0, 5, 7, 10, 14, 17, 21, 24, 28, 33])
+                outcome = "1" if old_home > old_away else ("2" if old_home < old_away else "X")
+                for bet in rugby_bets.get(previous, []):
+                    if not bet.get("settled"):
+                        bet["settled"] = True
+                        if bet["selection"] == outcome:
+                            dev = connected_devices.get(bet["dev_id"])
+                            if dev:
+                                dev["balance"] = round(dev["balance"] + bet["stake"] * bet["odds"], 2)
+                                sync_device_to_db(bet["dev_id"])
+                rugby_settled.add(previous)
+    return {"round": idx, "phase": phase, "seconds_left": round(max(0, (RUGBY_BETTING_SECONDS if phase == "BETTING" else RUGBY_CYCLE_SECONDS) - elapsed), 1),
+            "home": home, "away": away, "home_score": home_score if phase == "LIVE" else 0,
+            "away_score": away_score if phase == "LIVE" else 0, "result": result if phase == "LIVE" else None,
+            "odds": {"1": 1.90, "X": 14.0, "2": 2.10}}
+
+RUGBY_TEMPLATE = r'''<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Rugby | Virtual Betting Arena</title><style>
+body{margin:0;background:#08140f;color:#fff;font-family:Arial;padding:12px}main{max-width:600px;margin:auto}.card{background:#10251b;border:1px solid #2f5940;border-radius:12px;padding:14px;margin-bottom:12px}.top{display:flex;justify-content:space-between;gap:10px}.balance{color:#86efac;font-weight:bold}.field{height:190px;border:2px solid #dcfce7;border-radius:10px;background:repeating-linear-gradient(0deg,#166534 0 35px,#14532d 35px 70px);display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center}.score{font-size:38px;font-weight:bold;margin:12px}.options{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}.options button,button{border:0;border-radius:7px;padding:12px;font-weight:bold;cursor:pointer}.options button{background:#244633;color:white}.options button span{display:block;color:#bbf7d0;margin-top:5px}.stake{width:100%;box-sizing:border-box;background:#07110b;color:#fff;border:1px solid #3d6a4d;padding:12px;border-radius:7px;margin:8px 0}.go{width:100%;background:#22c55e;color:#06240e}.nav{color:#bbf7d0;text-decoration:none;margin-right:12px}.note{color:#bbd9c3;font-size:13px}</style></head><body><main><div class="card top"><b>🏉 VIRTUAL RUGBY</b><span class="balance" id="balance">UGX {{balance}}</span></div><div class="card"><a class="nav" href="/">Game Lobby</a><a class="nav" href="/arena">Football</a><a class="nav" href="/aviator">Aviator</a></div><div class="field card"><div id="phase">Loading round…</div><div id="teams">Preparing teams</div><div class="score" id="score">VS</div><div id="clock">--</div></div><div class="card"><b>Match winner (1X2)</b><div class="options" style="margin-top:10px"><button onclick="choose('1')" id="o1">HOME<span>1.90x</span></button><button onclick="choose('X')" id="oX">DRAW<span>14.00x</span></button><button onclick="choose('2')" id="o2">AWAY<span>2.10x</span></button></div><input class="stake" id="stake" type="number" min="100" value="500"/><button class="go" onclick="placeBet()">PLACE RUGBY BET</button><p class="note" id="message">Demo match. Bets close when the simulated match begins.</p></div></main><script>
+let selected='1',roundNow=-1;function choose(x){selected=x;['1','X','2'].forEach(k=>document.getElementById('o'+k).style.outline=k===x?'2px solid #86efac':'none')}
+async function refresh(){try{let s=await(await fetch('/rugby/state')).json();document.getElementById('balance').textContent='UGX '+Math.floor(s.balance).toLocaleString();document.getElementById('phase').textContent=s.phase==='BETTING'?'BETTING OPEN':'MATCH IN PLAY';document.getElementById('teams').textContent=s.home+' vs '+s.away;document.getElementById('score').textContent=s.phase==='LIVE'?s.home_score+' - '+s.away_score:'VS';document.getElementById('clock').textContent=s.seconds_left+' seconds '+(s.phase==='BETTING'?'to bet':'remaining in round');if(s.round!==roundNow){roundNow=s.round;document.getElementById('message').textContent='New rugby round. Choose a winner and place your stake.'}['1','X','2'].forEach(k=>document.getElementById('o'+k).disabled=s.phase!=='BETTING');}catch(e){}}
+async function placeBet(){let stake=Number(document.getElementById('stake').value);try{let r=await(await fetch('/rugby/bet',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({selection:selected,stake})})).json();document.getElementById('message').textContent=r.message;refresh()}catch(e){document.getElementById('message').textContent='Connection error; try again.'}}
+setInterval(refresh,1000);refresh();</script></body></html>'''
+
+@app.route('/rugby')
+def rugby_page():
+    dev_id = session.get('device_id')
+    info = connected_devices.get(dev_id, {"balance": 0})
+    return render_template_string(RUGBY_TEMPLATE, balance=f"{info.get('balance', 0):,.0f}")
+
+@app.route('/rugby/state')
+def rugby_state():
+    dev_id = session.get('device_id')
+    data = rugby_round_data()
+    data["balance"] = connected_devices.get(dev_id, {}).get("balance", 0)
+    return jsonify(data)
+
+@app.route('/rugby/bet', methods=['POST'])
+def rugby_bet():
+    dev_id = session.get('device_id')
+    info = connected_devices.get(dev_id)
+    if not info: return jsonify({"success": False, "message": "Player account not found."}), 400
+    data = request.get_json(silent=True) or {}
+    try: stake = round(float(data.get('stake', 0)), 2)
+    except (TypeError, ValueError): stake = 0
+    selection = data.get('selection')
+    if stake < 100 or stake > 50000: return jsonify({"success": False, "message": "Stake must be between UGX 100 and UGX 50,000."})
+    if selection not in ("1", "X", "2"): return jsonify({"success": False, "message": "Choose home, draw or away."})
+    with rugby_lock:
+        rd = rugby_round_data()
+        if rd["phase"] != "BETTING": return jsonify({"success": False, "message": "Betting is closed for this round."})
+        with lock:
+            if info["balance"] < stake: return jsonify({"success": False, "message": "Insufficient balance."})
+            info["balance"] = round(info["balance"] - stake, 2)
+            sync_device_to_db(dev_id)
+        rugby_bets.setdefault(rd["round"], []).append({"dev_id": dev_id, "stake": stake, "selection": selection, "odds": rd["odds"][selection], "settled": False})
+    return jsonify({"success": True, "message": f"Rugby bet placed: UGX {stake:,.0f} on {selection}."})
+
+PORTAL_TEMPLATE = """
+<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Arena Portal</title><style>
+body{font-family:Arial;background:#121212;color:#fff;display:flex;justify-content:center;align-items:center;height:100vh;margin:0}
+.card{background:#1e1e1e;border:1px solid #333;border-radius:12px;padding:35px;width:90%;max-width:400px;text-align:center}
+h1{color:#28a745}.btn{display:block;background:#2c2c2c;color:#fff;padding:14px;margin:12px 0;border-radius:8px;text-decoration:none;border:1px solid #444;cursor:pointer;font-size:1rem;font-weight:bold;width:100%;box-sizing:border-box}
+.badge{display:inline-block;padding:5px 10px;border-radius:15px;color:#000;font-weight:bold;background:{{color}}}
+input[type=password]{width:100%;box-sizing:border-box;padding:12px;background:#2c2c2c;color:#fff;border:1px solid #444;border-radius:8px;margin:12px 0;text-align:center;font-size:1.2rem;letter-spacing:3px}
+.err{color:#dc3545;font-size:0.85rem;margin-top:5px}
+</style></head><body><div class="card"><h1>ARENA PORTAL ⚡</h1>
+<p><span class="badge">Device {{device_number}}</span></p>
+{% if request.args.get('error') %}<p class="err">❌ {{ request.args.get('error') }}</p>{% endif %}
+<form method="POST" action="/admin-auth">
+  <input type="password" name="pin" placeholder="Enter Admin PIN" required maxlength="4">
+  <button type="submit" class="btn" style="background:#28a745;color:#000;">🛠️ Open Admin Panel</button>
+</form>
+<a class="btn" href="/arena" style="background:#21262d;margin-top:15px;">⚽ Virtual Football</a><a class="btn" href="/aviator" style="background:#7f1d1d;margin-top:10px;">✈️ Aviator</a><a class="btn" href="/rugby" style="background:#166534;margin-top:10px;">🏉 Rugby</a><hr style="border-color:#333;margin:18px 0"><div style="font-weight:bold;color:#facc15;margin-bottom:8px">MORE GAMES</div><a class="btn" href="/velocity" style="background:#1d4ed8;margin-top:8px;">🏎️ Velocity Car Racing</a><a class="btn" href="/chicken-clash" style="background:#9f1239;margin-top:8px;">🐔 Chicken Clash</a><a class="btn" href="/hot-7-fruit" style="background:#166534;margin-top:8px;">🍒 Hot 7 Fruit</a><a class="btn" href="/fortune-slots" style="background:#713f12;margin-top:8px;">🎰 Fortune Slots</a></div></body></html>
+"""
+
+MAIN_TEMPLATE = """
+<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>JJ Virtual Football Arena</title><style>
+body{font-family:Arial;background:#07111c;color:#fff;margin:0;padding-bottom:150px}
+header{background:#101d2c;padding:11px 15px;display:flex;justify-content:space-between;border-bottom:2px solid {{color}};align-items:center;position:sticky;top:0;z-index:10}
+.logo{color:{{color}};font-weight:bold;font-size:.95rem}.balance{background:#1c2b3c;padding:7px 13px;border-radius:16px;color:#49d7ff;font-weight:800}
+.container{padding:10px;max-width:680px;margin:auto}.card{background:#0e1b29;border:1px solid #25415d;border-radius:10px;padding:12px;margin-bottom:10px}
+.title{font-size:.9rem;font-weight:bold;color:#dcecff;margin:10px 0 7px;text-align:left;border-left:3px solid {{color}};padding-left:7px}
+.grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px}.odd{background:#18293b;color:#d7e5f3;border:1px solid #34516e;border-radius:6px;padding:9px;font-size:.8rem;cursor:pointer}
+.odd.selected{background:{{color}};color:#001018;font-weight:bold;border-color:{{color}}}
+.input{width:100%;box-sizing:border-box;padding:10px;background:#142333;color:#fff;border:1px solid #34516e;border-radius:5px;margin-top:6px}
+.place{width:100%;padding:12px;margin-top:8px;background:{{color}};border:0;border-radius:5px;font-weight:bold;color:#001018;cursor:pointer}.place:disabled{background:#303d4b;color:#9aa8b5}
+.bet{position:fixed;bottom:0;left:0;width:100%;box-sizing:border-box;background:#0d1825;border-top:2px solid {{color}};padding:11px;z-index:20}
+#resultBox{display:none}.win{background:#0c3b29;border:1px solid #28c77a;color:#78f0b3}.loss{background:#401b20;border:1px solid #ef5364;color:#ff9ca6}.pending{background:#26364a;border:1px solid #56738f;color:#b9d4ec}
+.live{display:none;background:#050a10;position:fixed;inset:0;z-index:30;padding:8px;overflow-y:auto}
+.tv-header{background:#111b27;border:1px solid #304a64;border-radius:6px;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.tv-teams{font-weight:bold;font-size:.95rem;color:#f0f6fc}.tv-status{font-size:.75rem;color:#9bb1c7}
+.tv-scorebox{background:#182635;border:1px solid #3a5874;padding:4px 14px;border-radius:4px;font-size:1.4rem;font-weight:bold;color:#58cfff;letter-spacing:2px}
+.pitch{height:430px;background:radial-gradient(ellipse at center,#238636 0%,#196c2e 70%,#0e4421 100%);border:3px solid #f0f6fc;border-radius:6px;position:relative;overflow:hidden;margin-bottom:8px;box-shadow:inset 0 0 40px rgba(0,0,0,.6)}
+.pitch-lines{position:absolute;inset:0;pointer-events:none}.pitch-lines::before{content:'';position:absolute;top:0;bottom:0;left:50%;width:2px;background:rgba(255,255,255,.65);transform:translateX(-50%)}.pitch-lines::after{content:'';position:absolute;top:50%;left:50%;width:78px;height:78px;border:2px solid rgba(255,255,255,.65);border-radius:50%;transform:translate(-50%,-50%)}
+.goal-left{position:absolute;left:0;top:31%;bottom:31%;width:22px;border:3px solid rgba(255,255,255,.9);border-left:0;background:repeating-linear-gradient(0deg,transparent 0 7px,rgba(255,255,255,.25) 8px 9px)}
+.goal-right{position:absolute;right:0;top:31%;bottom:31%;width:22px;border:3px solid rgba(255,255,255,.9);border-right:0;background:repeating-linear-gradient(0deg,transparent 0 7px,rgba(255,255,255,.25) 8px 9px)}
+.ball{position:absolute;width:13px;height:13px;background:#fff;border-radius:50%;transform:translate(-50%,-50%);transition:all .45s ease-in-out;box-shadow:0 0 10px #fff;z-index:6;border:1px solid #333}
+.pitch-clock{position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:8;background:#07111de8;border:1px solid #7bdcff;border-radius:6px;padding:6px 14px;font-size:18px;font-weight:900;color:#fff;letter-spacing:1px}
+.pitch-label{position:absolute;bottom:10px;left:50%;transform:translateX(-50%);z-index:8;background:#07111de8;border:1px solid #35516a;border-radius:6px;padding:5px 10px;font-size:11px;color:#c7d8e8}
+#liveResult{display:none;margin-bottom:8px}
+</style></head><body>
+<header><a class="logo" href="/">⚡ DEVICE {{device_number}}</a><div class="balance" id="bal">UGX {{ "%.2f"|format(balance) }}</div></header>
+<div class="container">
+<div class="card" id="timer">Loading...</div>
+<div class="card" id="resultBox"></div>
+<div class="card"><div id="match" style="font-weight:bold;font-size:1.05rem;margin-bottom:10px;color:#58cfff">Loading Match...</div>
+  <div class="title">FULL TIME RESULT (1X2)</div>
+  <div class="grid">
+    <button class="odd market-option" id="ft_1" onclick="pickMarket('ft_result','1')">1 (Home)<br><span id="o1">-</span></button>
+    <button class="odd market-option" id="ft_X" onclick="pickMarket('ft_result','X')">X (Draw)<br><span id="ox">-</span></button>
+    <button class="odd market-option" id="ft_2" onclick="pickMarket('ft_result','2')">2 (Away)<br><span id="o2">-</span></button>
+  </div>
+  <div class="title">HALF TIME RESULT (1X2)</div>
+  <div class="grid">
+    <button class="odd market-option" id="ht_1" onclick="pickMarket('ht_result','1')">HT 1 (Home)<br><span id="ht_o1">-</span></button>
+    <button class="odd market-option" id="ht_X" onclick="pickMarket('ht_result','X')">HT X (Draw)<br><span id="ht_ox">-</span></button>
+    <button class="odd market-option" id="ht_2" onclick="pickMarket('ht_result','2')">HT 2 (Away)<br><span id="ht_o2">-</span></button>
+  </div>
+</div>
+</div>
+<div class="bet">
+  <div id="sel" style="font-size:.85rem;color:#8fa7bc;margin-bottom:4px">No selection made</div>
+  <input id="stake" class="input" type="number" min="100" max="50000" placeholder="Stake UGX (100 - 50,000)" oninput="calc()">
+  <div id="pay" style="color:{{color}};margin-top:4px;font-size:.9rem">Potential Payout: UGX 0.00</div>
+  <button id="place" class="place" onclick="bet()">PLACE BET</button>
+</div>
+<div id="live" class="live">
+  <div id="liveResult"></div>
+  <div class="tv-header">
+    <div><div id="tv-teams" class="tv-teams">Home vs Away</div><div id="tv-status" class="tv-status">Live Match Stream</div></div>
+    <div id="tv-score" class="tv-scorebox">0 - 0</div>
+  </div>
+  <div class="pitch">
+    <div id="pitchClock" class="pitch-clock">00:00</div>
+    <div class="pitch-lines"></div>
+    <div class="goal-left"></div><div class="goal-right"></div>
+    <div id="ball" class="ball" style="left:50%;top:50%"></div>
+    <div class="pitch-label">LIVE VIRTUAL FOOTBALL BROADCAST</div>
+  </div>
+</div>
+<script>
+const id="{{device_id}}";
+let sel=null, odds={}, htOdds={}, round=-1, myRoundBets=0, lastResultShown=-1;
+setInterval(sync,1000);
+
+function sync(){
+ fetch('/get_state').then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.json()}).then(d=>{
+   document.getElementById('bal').innerText='UGX '+Number(d.balance||0).toFixed(2);
+   if(d.round_idx!==round){
+     round=d.round_idx;myRoundBets=0;sel=null;
+     document.querySelectorAll('.market-option').forEach(x=>x.classList.remove('selected'));
+     document.getElementById('stake').value='';
+     document.getElementById('sel').innerText='No selection made';
+     document.getElementById('pay').innerText='Potential Payout: UGX 0.00';
+   }
+   myRoundBets=Array.isArray(d.current_player_bets)?d.current_player_bets.length:0;
+   odds=d.odds||{};htOdds=d.ht_odds||{};
+   const home=d.home||'Home',away=d.away||'Away';
+   document.getElementById('match').innerText=home+' vs '+away;
+   document.getElementById('o1').innerText=odds['1']??'-';
+   document.getElementById('ox').innerText=odds['X']??'-';
+   document.getElementById('o2').innerText=odds['2']??'-';
+   document.getElementById('ht_o1').innerText=htOdds['1']??'-';
+   document.getElementById('ht_ox').innerText=htOdds['X']??'-';
+   document.getElementById('ht_o2').innerText=htOdds['2']??'-';
+
+   if(d.last_player_summary && d.last_player_summary.round_idx!==lastResultShown){
+     lastResultShown=d.last_player_summary.round_idx;
+     showPlayerResult(d.last_player_summary);
+   }
+
+   const t=document.getElementById('timer'),p=document.getElementById('place');
+   if(d.phase==='betting'){
+     document.getElementById('live').style.display='none';
+     t.innerText='⏱️ BETTING OPEN — CLOSES IN '+Math.ceil(d.time_left)+'s';
+     p.disabled=false;p.innerText=myRoundBets>0?'PLACE ANOTHER BET':'PLACE BET';
+   }else{
+     t.innerText=d.half_time_break?'⏸️ HALF-TIME BREAK':'🔴 LIVE MATCH — BETTING CLOSED';
+     p.disabled=true;p.innerText='BETTING CLOSED';
+     live(d);
+   }
+ }).catch(err=>console.warn('Sync unavailable:',err));
+}
+
+function showPlayerResult(r){
+ const box=document.getElementById('resultBox');
+ box.style.display='block';
+ if(r.wins>0 && r.losses>0) box.className='card pending';
+ else if(r.wins>0) box.className='card win';
+ else box.className='card loss';
+ let title=r.wins>0&&r.losses===0?'✅ YOU WON':r.losses>0&&r.wins===0?'❌ YOU LOST':'📊 ROUND SETTLED';
+ let detail='Match '+r.round_idx+' • '+r.home+' '+r.final_home_goals+' - '+r.final_away_goals+' '+r.away;
+ let money='Stake: UGX '+r.total_stake.toFixed(2)+' • Payout: UGX '+r.total_payout.toFixed(2)+' • Net: UGX '+r.net.toFixed(2);
+ box.innerHTML='<b>'+title+'</b><br>'+detail+'<br>'+money;
+}
+
+function getMarketName(market,type){
+ const names={ft_result:{1:'FT: Home (1)',X:'FT: Draw (X)',2:'FT: Away (2)'},ht_result:{1:'HT: Home (1)',X:'HT: Draw (X)',2:'HT: Away (2)'}};
+ return (names[market]&&names[market][type])||type;
+}
+function pickMarket(market,type){
+ sel={market,type};document.querySelectorAll('.market-option').forEach(b=>b.classList.remove('selected'));
+ const btn=document.getElementById((market==='ht_result'?'ht_':'ft_')+type);if(btn)btn.classList.add('selected');
+ const source=market==='ht_result'?htOdds:odds;
+ document.getElementById('sel').innerText='Selected: '+getMarketName(market,type)+' @ '+(source[type]||0);
+ calc();
+}
+function calc(){
+ const s=parseFloat(document.getElementById('stake').value||0),source=sel&&sel.market==='ht_result'?htOdds:odds,o=sel?(source[sel.type]||0):0;
+ document.getElementById('pay').innerText='Potential Payout: UGX '+(sel?(s*o):0).toFixed(2);
+}
+let busy=false;
+async function bet(){
+ if(busy)return;
+ const s=Number(document.getElementById('stake').value);
+ if(!sel)return alert('Please pick a Full Time or Half Time market first.');
+ if(!Number.isFinite(s)||s<100||s>50000)return alert('Stake must be between UGX 100 and UGX 50,000.');
+ busy=true;const b=document.getElementById('place');b.disabled=true;b.innerText='SENDING BET...';
+ try{
+   const response=await fetch('/place_bet',{method:'POST',headers:{'Content-Type':'application/json','Accept':'application/json'},credentials:'same-origin',body:JSON.stringify({device_id:id,stake:s,selection:{market:sel.market,type:sel.type}})});
+   const d=await response.json().catch(()=>({}));
+   if(!response.ok)throw new Error(d.message||('Server HTTP '+response.status));
+   if(!d.success)throw new Error(d.message||'Bet was not accepted.');
+   myRoundBets++;
+   document.getElementById('bal').innerText='UGX '+Number(d.new_balance||0).toFixed(2);
+   document.getElementById('stake').value='';sel=null;
+   document.querySelectorAll('.market-option').forEach(x=>x.classList.remove('selected'));
+   document.getElementById('sel').innerText='Bet placed. You can place another bet.';
+   document.getElementById('pay').innerText='Potential Payout: UGX 0.00';
+   b.innerText='PLACE ANOTHER BET';
+ }catch(e){alert(e.message||'Bet could not be placed.');}
+ finally{busy=false;b.disabled=false;}
+}
+function live(d){
+ const v=document.getElementById('live');v.style.display='block';
+ const elapsed=Math.max(0,Number(d.match_elapsed||0));
+ let minute,clock;
+ if(elapsed<45){minute=Math.min(45,Math.floor(elapsed/45*45));clock=String(minute).padStart(2,'0')+':00';}
+ else if(elapsed<48){minute=45;clock='45:00';}
+ else{minute=Math.min(90,45+Math.floor((elapsed-48)/45*45));clock=String(minute).padStart(2,'0')+':00';}
+ document.getElementById('pitchClock').innerText=clock;
+ document.getElementById('tv-teams').innerText=(d.home||'Home')+' vs '+(d.away||'Away');
+ document.getElementById('tv-status').innerText=d.half_time_break?'HALF-TIME BREAK':'LIVE MATCH STREAM • '+minute+"'";
+ let hg=0,ag=0;
+ if(Array.isArray(d.match_events))d.match_events.filter(e=>e.minute<=minute).forEach(e=>{if(e.type==='goal'){if(e.side==='home')hg++;else if(e.side==='away')ag++;}});
+ document.getElementById('tv-score').innerText=hg+' - '+ag;
+ const bx=50+Math.sin(elapsed*.9)*38,by=50+Math.cos(elapsed*.73)*30;
+ document.getElementById('ball').style.left=bx+'%';document.getElementById('ball').style.top=by+'%';
+}
+sync();
+</script></body></html>
+"""
+
+
+ADMIN_TEMPLATE = """
+<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Master Admin</title><style>
+body{font-family:Arial;background:#121212;color:#fff;padding:15px}.wrap{max-width:800px;margin:auto}.card{background:#1e1e1e;border:1px solid #333;border-radius:8px;padding:18px;margin-bottom:15px}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.stat{background:#252525;padding:12px;text-align:center;border-radius:6px}.v{font-size:1.15rem;font-weight:bold;color:#28a745;margin-top:5px}
+input,select{width:100%;box-sizing:border-box;padding:10px;background:#2c2c2c;color:#fff;border:1px solid #444;border-radius:5px;margin:5px 0 12px}
+button{padding:11px;border:0;border-radius:5px;font-weight:bold;cursor:pointer}.add{background:#28a745}.remove{background:#dc3545;color:#fff}.row{background:#252525;padding:10px;border-radius:5px;margin:7px 0}
+.ok{color:#28a745}.warn{color:#ffc107}.err{color:#dc3545}
+.audit-box{background:#0d1117;border:1px solid #238636;border-radius:6px;padding:12px;margin-top:10px}
+</style></head><body><div class="wrap"><a href="/" style="color:#28a745">← Portal</a>
+<div class="card"><h2>⚙️ Central Arena Control</h2><div class="grid">
+<div class="stat">Game Profit (20%)<div class="v">UGX {{ "%.2f"|format(displayed_profit) }}</div></div>
+<div class="stat">House Vault<div class="v">UGX {{ "%.2f"|format(vault_balance) }}</div></div>
+<div class="stat">Player Return Pool (80%)<div class="v">UGX {{ "%.2f"|format(cycle_return_pool) }}</div></div>
+</div><p>Protected reserve: <b>UGX {{ "%.2f"|format(reserve) }}</b></p>
+<div class="audit-box">
+  <h4 style="margin:0 0 8px;color:#28a745">🔍 System Balance Auditor</h4>
+  <div>Players Combined: <b>UGX {{ "%.2f"|format(total_players) }}</b></div>
+  <div>Game Profit: <b>UGX {{ "%.2f"|format(displayed_profit) }}</b></div>
+  <div>Return Pool: <b>UGX {{ "%.2f"|format(cycle_return_pool) }}</b></div>
+  {% if pending_sum > 0 %}<div>Pending Payouts: <b>UGX {{ "%.2f"|format(pending_sum) }}</b></div>{% endif %}
+  <hr style="border-color:#333">
+  <div><b>Total System Liquidity: UGX {{ "%.2f"|format(grand_total) }}</b></div>
+</div>
+</div>
+<div class="card"><h3>👤 Player Cashier</h3>{% if error %}<p class="err">{{error}}</p>{% endif %}
+<form method="POST" action="/admin/manage"><select name="device_id">{% for d in device_order %}{% set x=devices[d] %}<option value="{{d}}">Device {{x.number}} | UGX {{'%.2f'|format(x.balance)}}</option>{% endfor %}</select>
+<input name="amount" type="number" min="1" step="any" placeholder="Amount UGX"><button name="action" value="add" class="add">➕ ADD MONEY</button> <button name="action" value="remove" class="remove">➖ REMOVE MONEY</button></form></div>
+<div class="card"><h3>🏦 House Funds</h3><form method="POST" action="/admin/house"><input name="amount" type="number" min="1" step="any" placeholder="Amount UGX"><button name="action" value="add" class="add">ADD HOUSE FUNDS</button> <button name="action" value="remove" class="remove">REMOVE HOUSE FUNDS</button></form></div>
+<div class="card"><h3>📱 Connected Devices ({{device_order|length}})</h3>{% for d in device_order %}{% set x=devices[d] %}<div class="row">Device {{x.number}} — UGX {{'%.2f'|format(x.balance)}} <small>{{d[:12]}}...</small></div>{% endfor %}</div>
+<div class="card"><h3>🎮 Dynamic Return Pool Engine</h3>
+<p class="ok">Game Profit automatically receives 20% commission on every bet. All wins are paid exclusively out of the 80% Return Pool on a balanced weighted-probability basis.</p>
+</div>
+<div class="card"><h3>✅ Payout Safety Monitor</h3>
+{% if pending_payouts %}
+<p class="warn"><b>{{ pending_payouts|length }}</b> payout(s) pending central delivery.</p>
+{% for p in pending_payouts %}
+<div class="row">
+<b>Round {{p.round_idx}}</b> — Device {{ devices[p.dev_id].number if p.dev_id in devices else p.dev_id[:12] }}<br>
+Amount: <b>UGX {{ "%.2f"|format(p.amount) }}</b> — Attempts: {{p.attempts}}<br>
+<small>{{p.last_error}}</small>
+<form method="POST" action="/admin/payout/retry/{{p.id}}" style="margin-top:8px"><button class="add" type="submit">RETRY PAYOUT</button></form>
+</div>
+{% endfor %}
+{% else %}
+<p class="ok">No pending payouts.</p>
+{% endif %}
+</div>
+<div class="card"><h3>🏆 Last 3 Match Results — Winning Bets Only</h3>
+{% if recent_wins %}
+{% for w in recent_wins %}
+<div class="row">
+<b>Match {{w.round_idx}}</b> — {{ 'Half-time' if w.market == 'ht_result' else 'Full-time' }} win<br>
+Winning side: <b>{{ 'Home' if w.selection_type == '1' else ('Draw' if w.selection_type == 'X' else ('Away' if w.selection_type == '2' else w.selection_type)) }}</b><br>
+Winning odds: <b>{{ "%.2f"|format(w.odds) }}x</b> — Payout: <b class="ok">UGX {{ "%.2f"|format(w.payout) }}</b>
+</div>
+{% endfor %}
+{% else %}
+<p>No winning results recorded yet.</p>
+{% endif %}
+</div><div class="card"><h3>✈️ Aviator Game</h3><p>Manage Aviator from this registered admin device.</p><a href="/aviator/admin" style="display:inline-block;padding:10px 14px;background:#7f1d1d;color:#fff;border-radius:6px;text-decoration:none;font-weight:bold">OPEN AVIATOR ADMIN</a></div></body></html>
+"""
+
+
+
+# ----------------------------------------------------
+# ADDITIONAL BROWSER GAMES
+# Browser-native ports of the uploaded standalone games.
+# They use the website's existing player session, shared UGX balance and SQLite device sync.
+# ----------------------------------------------------
+EXTRA_GAME_LOCK = threading.RLock()
+EXTRA_GAME_TEMPLATES = {
+    "velocity": {
+        "title": "VELOCITY CAR RACING", "emoji": "🏎️", "accent": "#60a5fa",
+        "subtitle": "Choose the car you think will finish first.",
+        "choices": [{"id":"TOYOTA","name":"TOYOTA GT","odds":3.40,"color":"#d72d37"}, {"id":"JUGER","name":"JUGER MUSCLE","odds":3.33,"color":"#2d69d7"}, {"id":"BENZ","name":"BENZ GT-R","odds":3.47,"color":"#e6c823"}, {"id":"BMW","name":"BMW M4 COUPE","odds":3.40,"color":"#888888"}],
+        "min": 50, "max": 1000, "stake_label": "Stake (UGX 50–1,000)"
+    },
+    "chicken-clash": {
+        "title": "CHICKEN CLASH", "emoji": "🐔", "accent": "#fb7185",
+        "subtitle": "Pick the fighter that will win the arena battle.",
+        "choices": [{"id":"RED ROOSTER","name":"🔴 RED ROOSTER","odds":2.90,"color":"#ef4444"}, {"id":"BLUE BRAWLER","name":"🔵 BLUE BRAWLER","odds":2.75,"color":"#3b82f6"}, {"id":"YELLOW JET","name":"🟡 YELLOW JET","odds":3.10,"color":"#eab308"}, {"id":"BLACK SHADOW","name":"⬛ BLACK SHADOW","odds":2.95,"color":"#71717a"}],
+        "min": 50, "max": 50000, "stake_label": "Stake (UGX 50–50,000)"
+    },
+    "hot-7-fruit": {
+        "title": "HOT 7 FRUIT", "emoji": "🍒", "accent": "#4ade80",
+        "subtitle": "Spin the fruit reels. Matching lines can win.",
+        "choices": [], "min": 50, "max": 50000, "stake_label": "Stake (minimum UGX 50)"
+    },
+    "fortune-slots": {
+        "title": "FORTUNE SLOTS", "emoji": "🎰", "accent": "#fbbf24",
+        "subtitle": "Spin three reels and match symbols across a line.",
+        "choices": [], "min": 50, "max": 50000, "stake_label": "Stake (minimum UGX 50)"
+    }
+}
+EXTRA_FRUITS = ["🍋", "🍊", "🍇", "🍉", "🍒", "🔔", "7️⃣", "🍑"]
+EXTRA_SLOT_SYMBOLS = [{"label":"0x","mult":0,"emoji":"❌"},{"label":"0.5x","mult":0.5,"emoji":"🍋"},{"label":"1x","mult":1,"emoji":"🍊"},{"label":"2x","mult":2,"emoji":"💎"},{"label":"3x","mult":3,"emoji":"7️⃣"}]
+
+def _extra_balance(dev_id):
+    info = connected_devices.get(dev_id)
+    return float(info.get("balance", 0)) if info else 0.0
+
+def _extra_result(game, stake, selection=None):
+    # Resolve one server-side round; never trust a client-supplied outcome.
+    if game == "velocity":
+        choices = EXTRA_GAME_TEMPLATES[game]["choices"]
+        winner = random.choice(choices)
+        picked = next((c for c in choices if c["id"] == selection), None)
+        won = bool(picked and picked["id"] == winner["id"])
+        payout = round(stake + stake * (picked["odds"] - 1) * 0.80, 2) if won else 0.0
+        return {"won":won,"payout":payout,"headline":f"🏁 Winner: {winner['name']}","detail":(f"Your {picked['name']} finished first!" if won else f"Your pick did not win. Winner: {winner['name']}."),"display":winner["name"]}
+    if game == "chicken-clash":
+        choices = EXTRA_GAME_TEMPLATES[game]["choices"]
+        winner = random.choice(choices)
+        picked = next((c for c in choices if c["id"] == selection), None)
+        won = bool(picked and picked["id"] == winner["id"])
+        payout = round(stake * picked["odds"], 2) if won else 0.0
+        return {"won":won,"payout":payout,"headline":f"🏆 Winner: {winner['name']}","detail":(f"Your fighter won! Payout UGX {payout:,.0f}." if won else f"Your fighter lost. Winner: {winner['name']}."),"display":winner["name"]}
+    if game == "hot-7-fruit":
+        reels = [[random.choice(EXTRA_FRUITS) for _ in range(3)] for _ in range(3)]
+        lines = [reels[0], reels[1], reels[2], [reels[0][0],reels[1][1],reels[2][2]], [reels[0][2],reels[1][1],reels[2][0]]]
+        matched = next((line[0] for line in lines if line[0] == line[1] == line[2]), None)
+        mult = {"7️⃣":5,"🔔":3,"🍉":2,"🍒":2}.get(matched, 1) if matched else 0
+        payout = round(stake * mult, 2) if matched else 0.0
+        return {"won":payout>0,"payout":payout,"headline":f"{'🎉 WIN' if payout else 'TRY AGAIN'}{f' — {mult}x' if payout else ''}","detail":f"{'Matched ' + matched + ' on a line.' if payout else 'No matching line this spin.'}","reels":reels,"multiplier":mult}
+    # Fortune Slots: each reel lands on a multiplier tile; three matching non-zero tiles pay.
+    symbols = [random.choice(EXTRA_SLOT_SYMBOLS) for _ in range(3)]
+    matched = symbols[0]["mult"] == symbols[1]["mult"] == symbols[2]["mult"] and symbols[0]["mult"] > 0
+    mult = symbols[0]["mult"] if matched else 0
+    payout = round(stake * mult, 2) if matched else 0.0
+    return {"won":payout>0,"payout":payout,"headline":f"{'✨ WIN' if payout else 'NO WIN'}{f' — {mult:g}x' if payout else ''}","detail":f"{'Three matching symbols!' if payout else 'Try again for three matching symbols.'}","reels":[[x["emoji"] for x in symbols]],"symbols":symbols,"multiplier":mult}
+
+EXTRA_GAME_TEMPLATE = r'''<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>{{g.title}}</title><style>
+*{box-sizing:border-box}body{margin:0;background:#080d18;color:#f8fafc;font-family:Arial,sans-serif;padding:14px}main{max-width:620px;margin:auto}.card{background:#111c2d;border:1px solid #2c3b52;border-radius:14px;padding:15px;margin:10px 0}.top{display:flex;justify-content:space-between;align-items:center;gap:10px}.brand{font-weight:900;color:{{g.accent}}}.balance{font-weight:900;color:#4ade80}.nav{color:#cbd5e1;text-decoration:none;font-size:13px}.hero{text-align:center;padding:22px 10px;background:radial-gradient(circle at top,#263b5c,#101827 70%)}.hero .emoji{font-size:54px}.hero h1{font-size:24px;margin:8px 0;color:{{g.accent}}}.muted{color:#9fb0c5;font-size:13px}.choices{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin-top:12px}.pick{background:#1c2a40;color:#fff;border:1px solid #3c506d;border-radius:10px;padding:14px 8px;font-weight:bold;cursor:pointer;min-height:72px}.pick.selected{outline:3px solid {{g.accent}};background:#24364d}.pick small{display:block;color:{{g.accent}};margin-top:5px}.stake{width:100%;background:#080f1c;color:#fff;border:1px solid #425570;border-radius:9px;padding:13px;margin:12px 0;font-size:17px}.play{width:100%;border:0;border-radius:9px;padding:15px;background:{{g.accent}};color:#08111e;font-weight:900;font-size:16px;cursor:pointer}.play:disabled{opacity:.5}.result{font-weight:bold;font-size:18px;text-align:center;color:{{g.accent}}}.reels{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;text-align:center;margin:14px 0}.reel{font-size:40px;background:#080f1c;border:1px solid #41516b;border-radius:10px;padding:14px 4px;min-height:78px}.history{color:#cbd5e1;font-size:13px;line-height:1.6;white-space:pre-wrap}
+</style></head><body><main><div class="card top"><a class="nav" href="/">← GAME LOBBY</a><span class="brand">{{g.emoji}} {{g.title}}</span><span class="balance" id="balance">UGX {{'%.0f'|format(balance)}}</span></div><div class="card hero"><div class="emoji">{{g.emoji}}</div><h1>{{g.title}}</h1><div class="muted">{{g.subtitle}}</div></div>
+{% if game in ['velocity','chicken-clash'] %}<div class="card"><b>Choose your winner</b><div class="choices" id="choices">{% for c in g.choices %}<button class="pick" data-id="{{c.id}}" onclick="pick('{{c.id}}',this)" style="border-top:4px solid {{c.color}}">{{c.name}}<small>{{'%.2f'|format(c.odds)}}x odds</small></button>{% endfor %}</div></div>{% else %}<div class="card"><div class="muted">{{'Fruit matching lines pay up to 5x' if game=='hot-7-fruit' else 'Three matching multiplier symbols win'}}</div><div class="reels" id="reels"><div class="reel">❔</div><div class="reel">❔</div><div class="reel">❔</div></div></div>{% endif %}
+<div class="card"><label for="stake">{{g.stake_label}}</label><input id="stake" class="stake" type="number" min="{{g.min}}" max="{{g.max}}" value="500"><button class="play" id="play" onclick="playGame()">{{'START RACE' if game=='velocity' else ('START BATTLE' if game=='chicken-clash' else ('SPIN FRUIT REELS' if game=='hot-7-fruit' else 'SPIN FORTUNE SLOTS'))}}</button><p class="muted" id="message">Choose your selection and play. The stake is deducted from your shared website balance.</p><div class="result" id="result"></div><div class="history" id="detail"></div></div></main>
+<script>const GAME={{game|tojson}};let selected=null;function pick(id,el){selected=id;document.querySelectorAll('.pick').forEach(x=>x.classList.remove('selected'));el.classList.add('selected')}async function playGame(){const btn=document.getElementById('play'),stake=Number(document.getElementById('stake').value);btn.disabled=true;document.getElementById('message').textContent='Playing round…';try{const r=await fetch('/extra-games/play',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({game:GAME,stake,selection:selected})});const d=await r.json();document.getElementById('balance').textContent='UGX '+Math.floor(d.balance||0).toLocaleString();document.getElementById('message').textContent=d.message||'';if(d.success){document.getElementById('result').textContent=d.result.headline;document.getElementById('detail').textContent=d.result.detail+'\nStake: UGX '+stake.toLocaleString()+' | Payout: UGX '+Number(d.result.payout).toLocaleString();if(d.result.reels){let flat=d.result.reels.flat();if(GAME==='hot-7-fruit'){document.getElementById('reels').innerHTML=d.result.reels.map(row=>'<div class="reel">'+row.join('<br>')+'</div>').join('')}else{document.getElementById('reels').innerHTML=flat.map(x=>'<div class="reel">'+x+'</div>').join('')}}}else{document.getElementById('result').textContent='';document.getElementById('detail').textContent=''}}catch(e){document.getElementById('message').textContent='Connection error. Please try again.'}finally{btn.disabled=false}}</script></body></html>'''
+
+@app.route('/velocity')
+def velocity_page():
+    dev_id=session.get('device_id'); info=connected_devices.get(dev_id,{"balance":0})
+    return render_template_string(EXTRA_GAME_TEMPLATE, g=EXTRA_GAME_TEMPLATES['velocity'], game='velocity', balance=info.get('balance',0))
+
+@app.route('/chicken-clash')
+def chicken_clash_page():
+    dev_id=session.get('device_id'); info=connected_devices.get(dev_id,{"balance":0})
+    return render_template_string(EXTRA_GAME_TEMPLATE, g=EXTRA_GAME_TEMPLATES['chicken-clash'], game='chicken-clash', balance=info.get('balance',0))
+
+@app.route('/hot-7-fruit')
+def hot_7_fruit_page():
+    dev_id=session.get('device_id'); info=connected_devices.get(dev_id,{"balance":0})
+    return render_template_string(EXTRA_GAME_TEMPLATE, g=EXTRA_GAME_TEMPLATES['hot-7-fruit'], game='hot-7-fruit', balance=info.get('balance',0))
+
+@app.route('/fortune-slots')
+def fortune_slots_page():
+    dev_id=session.get('device_id'); info=connected_devices.get(dev_id,{"balance":0})
+    return render_template_string(EXTRA_GAME_TEMPLATE, g=EXTRA_GAME_TEMPLATES['fortune-slots'], game='fortune-slots', balance=info.get('balance',0))
+
+@app.route('/extra-games/play', methods=['POST'])
+def extra_games_play():
+    dev_id=session.get('device_id'); info=connected_devices.get(dev_id)
+    if not info: return jsonify({"success":False,"message":"Player session not found."}),400
+    data=request.get_json(silent=True) or {}; game=data.get('game'); selection=data.get('selection')
+    if game not in EXTRA_GAME_TEMPLATES: return jsonify({"success":False,"message":"Unknown game."}),400
+    try: stake=round(float(data.get('stake',0)),2)
+    except (TypeError,ValueError): stake=0
+    config=EXTRA_GAME_TEMPLATES[game]
+    if not (config['min'] <= stake <= config['max']): return jsonify({"success":False,"message":f"Stake must be between UGX {config['min']:,} and UGX {config['max']:,}."})
+    if game in ('velocity','chicken-clash') and selection not in [c['id'] for c in config['choices']]:
+        return jsonify({"success":False,"message":"Please choose a selection first."})
+    with EXTRA_GAME_LOCK:
+        with lock:
+            if float(info.get('balance',0)) < stake:
+                return jsonify({"success":False,"message":"Insufficient balance."})
+            info['balance']=round(float(info['balance'])-stake,2)
+            sync_device_to_db(dev_id)
+        result=_extra_result(game,stake,selection)
+        payout=max(0.0,round(float(result.get('payout',0)),2))
+        if payout:
+            with lock:
+                info['balance']=round(float(info.get('balance',0))+payout,2)
+                sync_device_to_db(dev_id)
+        try:
+            save_system_metric(f'extra_{game}_last_payout', payout)
+            save_system_metric(f'extra_{game}_last_stake', stake)
+        except Exception:
+            pass
+    return jsonify({"success":True,"message":"Round complete.","balance":info['balance'],"result":result})
+
+
+if __name__ == '__main__':
+    init_db()
+    app.run(host='0.0.0.0', port=5961, debug=False)
