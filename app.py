@@ -482,7 +482,7 @@ def ensure_device(dev_id=None):
 @app.route('/')
 def index():
     if session.get('account_id'):
-        return redirect(url_for('arena_page'))
+        return redirect('/arena')
     return redirect('/login')
 
 @app.before_request
