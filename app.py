@@ -15,7 +15,7 @@ except Exception:
 app = Flask(__name__)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # Render's persistent disk is mounted at /var/data. Keep SQLite and the Flask
-# signing key there so deploys/restarts do not create a new season or lose sessions.[cite: 1, 2]
+# signing key there so deploys/restarts do not create a new season or lose sessions.[cite: 1, 2, 3]
 DATA_DIR = os.environ.get("DATA_DIR") or (
     "/var/data" if os.path.isdir("/var/data") and os.access("/var/data", os.W_OK) else BASE_DIR
 )
@@ -483,7 +483,6 @@ def ensure_device(dev_id=None):
 def index():
     if session.get('account_id'):
         return redirect(url_for('arena_page'))
-    # Fallback to direct redirect or render if login route varies
     return redirect('/login')
 
 @app.before_request
@@ -842,4 +841,4 @@ def settle_round_if_needed(round_data):
         settled_rounds.add(round_idx)
         with get_db() as conn:
             conn.execute("INSERT OR IGNORE INTO settled_rounds (round_idx) VALUES (?)", (round_idx,))
-            conn.commit()w
+            conn.commit()
